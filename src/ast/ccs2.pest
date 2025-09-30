@@ -1,0 +1,68 @@
+// Syntax definition: https://pest.rs/book/grammars/syntax.html
+
+WS      = _{ " " | "\t" | COMMENT }
+COMMENT = _{ (("//" ~ (!NEWLINE ~ ANY)* ~ (NEWLINE | EOI)) | ("/*" ~ ("/**/" | (!"*/" ~ ANY))* ~ "*/")) }
+IGNORED = _{ (WS | NEWLINE) }
+
+single_quote_str = @{ "'" ~ ("\\\'" | (!"'" ~ ANY))* ~ "'" } // Previously, '' was an escape? Weird
+double_quote_str = @{ "\"" ~ ("\\\"" | (!"\"" ~ ANY))* ~ "\"" }
+unquoted_str     = @{ (ASCII_ALPHANUMERIC | "_" | "-" | "$" | ".")+ }
+str              = ${ single_quote_str | double_quote_str | unquoted_str }
+
+lparen = _{ "(" }
+rparen = _{ ")" }
+lbrace = _{ "{" }
+rbrace = _{ "}" }
+semi   = _{ ";" }
+colon  = _{ ":" }
+comma  = _{ "," }
+dot    = _{ "." }
+gt     = _{ ">" }
+eq     = _{ "=" }
+slash  = _{ "/" }
+
+// keywords
+constrain =  { "@constrain" }
+context   =  { "@context" }
+import    =  { "@import" }
+override  =  { "@override" }
+
+value = @{ str }
+
+simple_prop_def         = { str ~ IGNORED* ~ eq ~ IGNORED* ~ value ~ IGNORED* }
+left_override_prof_def  = _{ override ~ IGNORED+ ~ simple_prop_def }
+right_override_prof_def = _{ simple_prop_def ~ IGNORED+ ~ override }
+overridden_prop_def     =  { left_override_prof_def | right_override_prof_def }
+
+prop_def = { simple_prop_def | overridden_prop_def }
+
+// constraints:
+// a.b a.c      --- conjunction: any context containing BOTH a.b AND a.c
+// a.b, a.c     --- disjunction: any context containing EITHER a.b OR a.c
+key            = { str ~ (IGNORED* ~ dot ~ IGNORED* ~ str)* }
+conjunction    = { WS* ~ (key | selector_group) }
+disjunction    = { WS* ~ comma ~ WS* ~ (key | selector_group) }
+selector_def   = { key ~ (conjunction | disjunction)* }
+selector       = _{ (selector_def | selector_group) }
+selector_group = { WS* ~ lparen ~ WS* ~ selector+ ~ WS* ~ rparen ~ WS* ~ selector? }
+
+// aaa.bbb : name = "Clem"
+ctx_def = { WS* ~ selector ~ WS* ~ colon ~ WS* ~ (prop_def | constrain_stmt) }
+// aaa.bbb { name = "Clem" }
+ctx_block = { WS* ~ selector+ ~ IGNORED* ~ block }
+
+import_stmt = {
+    import ~ WS+ ~ ((lparen ~ IGNORED* ~ str ~ IGNORED* ~ rparen) | (str ~ WS* ~ semi*))
+}
+
+context_stmt = {
+    context ~ WS+ ~ ((lparen ~ IGNORED* ~ selector ~ IGNORED* ~ rparen) | (selector ~ WS* ~ semi*))
+}
+
+constrain_stmt = {
+    constrain ~ WS+ ~ ((lparen ~ IGNORED* ~ selector ~ IGNORED* ~ rparen) | (selector ~ WS* ~ semi*))
+}
+
+block      = _{ IGNORED* ~ lbrace ~ IGNORED* ~ block_stmt* ~ IGNORED* ~ rbrace }
+block_stmt = _{ IGNORED* ~ (ctx_def | ctx_block | prop_def | import_stmt | constrain_stmt) ~ IGNORED* ~ semi* }
+file       = _{ SOI ~ (IGNORED* ~ context_stmt* ~ IGNORED* ~ block_stmt ~ IGNORED*)* ~ EOI }
