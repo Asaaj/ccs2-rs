@@ -124,7 +124,11 @@ mod tests {
 
     fn test_impl(to_parse: &str, should_succeed: bool) -> Result<()> {
         let res = Ccs2Parser::parse(Rule::file, to_parse);
-        assert_eq!(res.is_ok(), should_succeed, "Unexpected parse output: {res:?}");
+        assert_eq!(
+            res.is_ok(),
+            should_succeed,
+            "Unexpected parse output: {res:?}"
+        );
         Ok(())
     }
 }

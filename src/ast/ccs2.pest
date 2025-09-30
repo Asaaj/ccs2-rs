@@ -17,9 +17,7 @@ semi   = _{ ";" }
 colon  = _{ ":" }
 comma  = _{ "," }
 dot    = _{ "." }
-gt     = _{ ">" }
 eq     = _{ "=" }
-slash  = _{ "/" }
 
 // keywords
 constrain =  { "@constrain" }
