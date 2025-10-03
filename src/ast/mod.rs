@@ -2,40 +2,103 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
     io::Read,
-    ops::Range,
+    ops::{Add, Range},
     path::{Path, PathBuf},
     rc::Rc,
 };
 
-mod parser;
+use indexmap::IndexMap;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+use crate::ast::rule_tree::RuleTreeNode;
+
+mod dnf;
+mod formula;
+mod parser;
+mod property;
+mod rule_tree;
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Specificity {
+    should_override: u32,
+    positive: u32,
+    negative: u32,
+    wildcard: u32,
+}
+impl Specificity {
+    pub const fn zero() -> Self {
+        Self::new(0, 0, 0, 0)
+    }
+
+    pub const fn positive_lit() -> Self {
+        Self::new(0, 1, 0, 0)
+    }
+
+    pub const fn wildcard() -> Self {
+        Self::new(0, 0, 0, 1)
+    }
+
+    pub const fn new(should_override: u32, positive: u32, negative: u32, wildcard: u32) -> Self {
+        Self {
+            should_override,
+            positive,
+            negative,
+            wildcard,
+        }
+    }
+}
+impl Add for Specificity {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self {
+            should_override: self.should_override + rhs.should_override,
+            positive: self.positive + rhs.positive,
+            negative: self.negative + rhs.negative,
+            wildcard: self.wildcard + rhs.wildcard,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Hash, Eq)]
 pub struct Key {
     name: String,
     values: Vec<String>,
-    // TODO
+    specificity: Specificity,
 }
 impl Key {
     pub fn new(name: impl ToString, values: impl IntoIterator<Item = String>) -> Self {
-        todo!()
+        let mut values: Vec<_> = values.into_iter().collect();
+        values.sort_unstable(); // Important: values are always sorted!
+        Self {
+            name: name.to_string(),
+            specificity: if !values.is_empty() {
+                Specificity::positive_lit()
+            } else {
+                Specificity::wildcard()
+            },
+            values,
+        }
     }
 }
-pub struct RuleTreeNode {
-    // TODO
+impl PartialEq for Key {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.values == other.values
+    }
 }
-impl RuleTreeNode {
-    pub fn add_property(&mut self, name: &str, value: &str, origin: Origin, should_override: bool) {
-        todo!()
+impl PartialOrd for Key {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
-    pub fn add_constraint(&mut self, key: Key) {
-        todo!()
+}
+impl Ord for Key {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        debug_assert!(self.values.is_sorted());
+        debug_assert!(other.values.is_sorted());
+
+        self.name
+            .cmp(&other.name)
+            .then_with(|| self.values.cmp(&other.values))
     }
-    pub fn traverse(&mut self, selector: &Selector) {
-        todo!()
-    }
-    // pub fn traverse(self, selector: &dyn Selector) -> Self {
-    //     todo!()
-    // }
 }
 
 type Env = HashMap<String, String>;
@@ -74,11 +137,11 @@ pub enum Selector {
     /// A single-step primitive selector expression
     Step(Key),
 }
-impl Display for Selector {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
-    }
-}
+// impl Display for Selector {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         todo!()
+//     }
+// }
 
 /// Provides a binding to paths which are used for resolving `@import` expressions
 pub trait ImportResolver {
@@ -92,7 +155,10 @@ pub struct Expr {
 }
 impl Expr {
     pub fn new(op: Op, children: impl IntoIterator<Item = Selector>) -> Self {
-        todo!()
+        Self {
+            op,
+            children: children.into_iter().collect(),
+        }
     }
 }
 
@@ -148,7 +214,7 @@ impl AstNode {
             }
             Nested(nested) => {
                 if let Some(selector) = nested.selector.as_ref() {
-                    build_context.traverse(selector);
+                    *build_context = build_context.traverse(selector.clone()).clone();
                 } else {
                     for rule in nested.rules.iter_mut() {
                         rule.add_to(build_context);
@@ -229,9 +295,12 @@ impl Nested {
 /// words, a flat selector consists of strictly alternating levels of AND and OR.
 pub fn flatten(expr: Selector) -> Selector {
     match expr {
-        Selector::Step(..) => expr,
+        Selector::Step(..) => {
+            eprintln!("Step: {expr:?}");
+            expr
+        }
         Selector::Expr(expr) => {
-            let mut lit_children = HashMap::<Selector, HashSet<String>>::default();
+            let mut lit_children = IndexMap::<Selector, HashSet<String>>::default();
             let mut new_children = Vec::<Selector>::default();
 
             let mut add_child = |e: Selector| {
@@ -246,6 +315,7 @@ pub fn flatten(expr: Selector) -> Selector {
                         // a special entry in values...
                         // TODO if this is done prior to normalize(), that function needs to be changed to understand
                         // set-valued pos/neg literals... and might need to be changed for negative literals either way?
+                        eprintln!("Add {key:?} to lit_children");
                         lit_children
                             .entry(Selector::Step(key.clone()))
                             .or_default()
@@ -258,21 +328,26 @@ pub fn flatten(expr: Selector) -> Selector {
             };
 
             for e in expr.children.into_iter().map(flatten) {
+                println!("Checking child {e:?}");
                 match e {
-                    Selector::Expr(expr) => match expr.op {
-                        Op::Or => {
-                            for c in expr.children {
-                                add_child(c);
+                    Selector::Expr(e) => {
+                        if e.op == expr.op {
+                            for c in e.children {
+                                add_child(c)
                             }
                         }
-                        Op::And => add_child(Selector::Expr(expr)),
-                    },
+                    }
                     Selector::Step(..) => add_child(e),
                 }
             }
 
             for (child, values) in lit_children {
-                new_children.push(Selector::Step(Key::new(child, values)))
+                eprintln!("ADDING: {child:?}");
+                match child {
+                    Selector::Step(key) => new_children.push(Selector::Step(Key::new(key.name, values))),
+                    Selector::Expr(..) => panic!("Attempted to add literal expr!"),
+                }
+                
             }
             if new_children.len() == 1 {
                 new_children.into_iter().next().unwrap()
@@ -280,5 +355,69 @@ pub fn flatten(expr: Selector) -> Selector {
                 Selector::Expr(Expr::new(expr.op, new_children))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    macro_rules! selector {
+        ($item:literal) => {
+            Selector::Step(Key::new($item, []))
+        };
+        ($item:expr) => {
+            $item
+        };
+    }
+
+    macro_rules! expr {
+        ($operator:ident, $op1:expr $(, $ops:expr)*) => {
+            Selector::Expr(Expr::new(Op::$operator, [selector!($op1) $(, selector!($ops))*]))
+        }
+    }
+
+    macro_rules! AND {
+        ($op1:expr $(, $ops:expr)*) => {
+            expr!(And, $op1 $(, $ops)*)
+        }
+    }
+
+    macro_rules! OR {
+        ($op1:expr $(, $ops:expr)*) => {
+            expr!(Or, $op1 $(, $ops)*)
+        }
+    }
+
+    #[test]
+    fn flatten_already_flattened() {
+        let selector = AND!("a", "b", "c", "d");
+
+        assert_eq!(flatten(selector.clone()), selector);
+    }
+
+    #[test]
+    fn flatten_and() {
+        let selector = AND!(AND!("a", "b"), AND!("c", "d"));
+        let expected = AND!("a", "b", "c", "d");
+
+        assert_eq!(flatten(selector), expected);
+    }
+
+    #[test]
+    fn flatten_or() {
+        let selector = OR!(OR!("a", "b"), OR!("c", "d"));
+        let expected = OR!("a", "b", "c", "d");
+
+        assert_eq!(flatten(selector), expected);
+    }
+
+    #[test]
+    fn flatten_mixed() {
+        let selector = AND!(OR!("a", "b", "c"), AND!("c", "d"), OR!("d", OR!("e", AND!("f", "g"))));
+        let expected = AND!(OR!("a", "b", "c"), "c", "d", OR!(AND!("f", "g"), "d", "e"));
+
+        assert_eq!(flatten(selector), expected);
     }
 }
