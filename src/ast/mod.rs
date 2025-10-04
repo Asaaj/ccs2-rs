@@ -1,13 +1,15 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
+    hash::Hash,
     io::Read,
     ops::{Add, Range},
     path::{Path, PathBuf},
     rc::Rc,
 };
 
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
+use itertools::Itertools;
 
 use crate::ast::rule_tree::RuleTreeNode;
 
@@ -79,6 +81,18 @@ impl Key {
             values,
         }
     }
+    /// Key-value parsing shouldn't be done here, really. It's done by the actual parser
+    /// implementation. However, this is handy for expressivity in tests, so we'll just allow it for
+    /// that.
+    #[cfg(test)]
+    pub fn parse(input: impl ToString) -> Self {
+        let input = input.to_string();
+        let inputs: Vec<&str> = input.split(".").collect();
+        assert!(!inputs.is_empty());
+        let (key, values) = &inputs.split_at(1);
+        let values: Vec<_> = values.iter().map(ToString::to_string).collect();
+        Self::new(key[0], values)
+    }
 }
 impl PartialEq for Key {
     fn eq(&self, other: &Self) -> bool {
@@ -98,6 +112,22 @@ impl Ord for Key {
         self.name
             .cmp(&other.name)
             .then_with(|| self.values.cmp(&other.values))
+    }
+}
+impl Display for Key {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // # TODO java code notices if key/val are actually not idents and quotes them
+        if self.values.len() > 1 {
+            let val_strs = self.values.iter().map(|val| format!("{}.{val}", self.name));
+            let vals_str: String = Itertools::intersperse(val_strs, ", ".to_string()).collect();
+            write!(f, "({})", vals_str)
+        } else if let Some(first) = self.values.first()
+            && first != ""
+        {
+            write!(f, "{}.{first}", self.name)
+        } else {
+            write!(f, "{}", self.name)
+        }
     }
 }
 
@@ -128,6 +158,14 @@ pub enum Op {
     And,
     Or,
 }
+impl Display for Op {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Op::And => write!(f, "AND"),
+            Op::Or => write!(f, "OR"),
+        }
+    }
+}
 
 /// AST nodes representing selector expressions
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -137,11 +175,14 @@ pub enum Selector {
     /// A single-step primitive selector expression
     Step(Key),
 }
-// impl Display for Selector {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         todo!()
-//     }
-// }
+impl Display for Selector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Selector::Expr(expr) => write!(f, "{expr}"),
+            Selector::Step(key) => write!(f, "{key}"),
+        }
+    }
+}
 
 /// Provides a binding to paths which are used for resolving `@import` expressions
 pub trait ImportResolver {
@@ -159,6 +200,13 @@ impl Expr {
             op,
             children: children.into_iter().collect(),
         }
+    }
+}
+impl Display for Expr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let child_strs = self.children.iter().map(ToString::to_string);
+        let children_str: String = Itertools::intersperse(child_strs, " ".to_string()).collect();
+        write!(f, "({} {children_str})", self.op)
     }
 }
 
@@ -295,12 +343,14 @@ impl Nested {
 /// words, a flat selector consists of strictly alternating levels of AND and OR.
 pub fn flatten(expr: Selector) -> Selector {
     match expr {
-        Selector::Step(..) => {
-            eprintln!("Step: {expr:?}");
-            expr
+        Selector::Step(k) => {
+            eprintln!("  Step: {:?}", k);
+            Selector::Step(k)
         }
         Selector::Expr(expr) => {
-            let mut lit_children = IndexMap::<Selector, HashSet<String>>::default();
+            eprintln!("EXPR: {expr}");
+
+            let mut lit_children = IndexMap::<Selector, IndexSet<String>>::default();
             let mut new_children = Vec::<Selector>::default();
 
             let mut add_child = |e: Selector| {
@@ -315,9 +365,10 @@ pub fn flatten(expr: Selector) -> Selector {
                         // a special entry in values...
                         // TODO if this is done prior to normalize(), that function needs to be changed to understand
                         // set-valued pos/neg literals... and might need to be changed for negative literals either way?
-                        eprintln!("Add {key:?} to lit_children");
+                        eprintln!("    Add {key} to lit_children");
+                        let key_without_values = Key::new(key.name, []);
                         lit_children
-                            .entry(Selector::Step(key.clone()))
+                            .entry(Selector::Step(key_without_values))
                             .or_default()
                             .extend(key.values.iter().cloned());
                     }
@@ -328,27 +379,36 @@ pub fn flatten(expr: Selector) -> Selector {
             };
 
             for e in expr.children.into_iter().map(flatten) {
-                println!("Checking child {e:?}");
+                println!("  Checking child {e}");
                 match e {
                     Selector::Expr(e) => {
                         if e.op == expr.op {
                             for c in e.children {
                                 add_child(c)
                             }
+                        } else {
+                            add_child(Selector::Expr(e))
                         }
                     }
                     Selector::Step(..) => add_child(e),
                 }
             }
 
+            eprintln!("{lit_children:?}");
             for (child, values) in lit_children {
-                eprintln!("ADDING: {child:?}");
+                eprintln!("  ADDING: {child:?}");
                 match child {
-                    Selector::Step(key) => new_children.push(Selector::Step(Key::new(key.name, values))),
+                    Selector::Step(key) => {
+                        new_children.push(Selector::Step(Key::new(key.name, values)))
+                    }
                     Selector::Expr(..) => panic!("Attempted to add literal expr!"),
                 }
-                
             }
+            eprintln!(
+                "NEW_CHILDREN: {}",
+                Itertools::intersperse(new_children.iter().map(ToString::to_string), ", ".into())
+                    .collect::<String>()
+            );
             if new_children.len() == 1 {
                 new_children.into_iter().next().unwrap()
             } else {
@@ -365,10 +425,16 @@ mod tests {
 
     macro_rules! selector {
         ($item:literal) => {
-            Selector::Step(Key::new($item, []))
+            Selector::Step(Key::parse($item))
         };
         ($item:expr) => {
             $item
+        };
+    }
+
+    macro_rules! kv {
+        ($item:literal $(: ($($val:literal)+))?) => {
+            Selector::Step(Key::new($item, [$($($val.to_string(),)+)?]))
         };
     }
 
@@ -402,7 +468,9 @@ mod tests {
         let selector = AND!(AND!("a", "b"), AND!("c", "d"));
         let expected = AND!("a", "b", "c", "d");
 
-        assert_eq!(flatten(selector), expected);
+        let flattened = flatten(selector);
+        assert_eq!(flattened, expected);
+        assert_eq!(format!("{}", flattened), "(AND a b c d)");
     }
 
     #[test]
@@ -410,14 +478,32 @@ mod tests {
         let selector = OR!(OR!("a", "b"), OR!("c", "d"));
         let expected = OR!("a", "b", "c", "d");
 
-        assert_eq!(flatten(selector), expected);
+        let flattened = flatten(selector);
+        assert_eq!(flattened, expected);
+        assert_eq!(format!("{}", flattened), "(OR a b c d)");
     }
 
     #[test]
     fn flatten_mixed() {
+        #[rustfmt::skip]
         let selector = AND!(OR!("a", "b", "c"), AND!("c", "d"), OR!("d", OR!("e", AND!("f", "g"))));
         let expected = AND!(OR!("a", "b", "c"), "c", "d", OR!(AND!("f", "g"), "d", "e"));
 
-        assert_eq!(flatten(selector), expected);
+        let flattened = flatten(selector);
+        assert_eq!(flattened, expected);
+        assert_eq!(
+            format!("{}", flattened),
+            "(AND (OR a b c) c d (OR (AND f g) d e))"
+        );
+    }
+
+    #[test]
+    fn flatten_single_key_leaf_disjunctions() {
+        let selector = AND!(OR!("a.x", "a.y", "a.z"), "b");
+        let expected = AND!(kv!("a": ("x" "y" "z")), "b");
+
+        let flattened = flatten(selector);
+        assert_eq!(flattened, expected);
+        assert_eq!(format!("{}", flattened), "(AND (a.x, a.y, a.z) b)");
     }
 }
