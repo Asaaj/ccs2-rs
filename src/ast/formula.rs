@@ -1,5 +1,5 @@
-use crate::ast::{Key, Specificity};
-use std::{collections::BTreeSet, ops::Add};
+use crate::ast::{JoinedBy, Key, Specificity};
+use std::{collections::BTreeSet, fmt::Display, ops::Add};
 
 /// A conjunction of literal matchers
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
@@ -13,12 +13,18 @@ impl Clause {
         }
     }
 
+    pub fn with_literals(keys: impl IntoIterator<Item = Key>) -> Self {
+        Self {
+            literals: BTreeSet::from_iter(keys),
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.literals.is_empty()
     }
 
     pub fn first(&self) -> Option<Key> {
-        self.literals.iter().cloned().next()
+        self.literals.iter().next().cloned()
     }
 
     pub fn is_subset(&self, other: &Clause) -> bool {
@@ -29,7 +35,7 @@ impl Clause {
         self.is_subset(other) && self.literals.len() < other.literals.len()
     }
 
-    pub fn elements<'a>(&'a self) -> impl Iterator<Item = &'a Key> {
+    pub fn elements(&self) -> impl Iterator<Item = &Key> {
         self.literals.iter()
     }
 
@@ -65,6 +71,12 @@ impl Ord for Clause {
             .then_with(|| self.literals.cmp(&other.literals))
     }
 }
+impl Display for Clause {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let literals: String = self.literals.iter().joined_by(" ");
+        write!(f, "{literals}")
+    }
+}
 
 #[derive(Clone, Debug, Eq, Hash)]
 pub struct Formula {
@@ -86,6 +98,10 @@ impl Formula {
         Self::new(BTreeSet::from([clause]), Default::default())
     }
 
+    pub fn with_clauses(clauses: impl IntoIterator<Item = Clause>) -> Self {
+        Self::new(BTreeSet::from_iter(clauses), Default::default())
+    }
+
     pub fn is_empty(&self) -> bool {
         self.first().is_empty()
     }
@@ -100,6 +116,10 @@ impl Formula {
         self.clauses.is_subset(&other.clauses)
     }
 
+    pub fn into_inner(self) -> (BTreeSet<Clause>, BTreeSet<Clause>) {
+        (self.clauses, self.shared)
+    }
+
     pub fn elements(&self) -> &BTreeSet<Clause> {
         &self.clauses
     }
@@ -109,10 +129,9 @@ impl Formula {
     }
 
     pub fn merge(self, other: Formula) -> Self {
-        // TODO: Would be nicer to have a non-ref union
         let merged = Self::new(
-            self.clauses.union(&other.clauses).cloned().collect(),
-            self.shared.union(&other.shared).cloned().collect(),
+            self.clauses.into_union(other.clauses),
+            self.shared.into_union(other.shared),
         );
         merged.normalize()
     }
@@ -134,7 +153,7 @@ impl Formula {
         let mut minimized = BTreeSet::<Clause>::default();
         for c in self.clauses.into_iter() {
             minimized = minimized.into_iter().filter(|s| !subsumes(&c, s)).collect();
-            if minimized.iter().any(|s| subsumes(s, &c)) {
+            if !minimized.iter().any(|s| subsumes(s, &c)) {
                 minimized.insert(c);
             }
         }
@@ -170,9 +189,52 @@ impl Ord for Formula {
             .then_with(|| self.clauses.cmp(&other.clauses))
     }
 }
+impl Display for Formula {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let clauses: String = self.clauses.iter().joined_by(", ");
+        write!(f, "{clauses}")
+    }
+}
 
 /// A clause c "subsumes" a clause d when d is a subset of c
 /// BUG: The comment seems to describe the opposite of the implementation
 fn subsumes(c: &Clause, d: &Clause) -> bool {
     c.is_subset(d)
+}
+
+pub trait IntoUnion {
+    fn into_union(self, other: Self) -> Self;
+}
+impl IntoUnion for Clause {
+    fn into_union(self, other: Self) -> Self {
+        Clause {
+            literals: self.literals.into_union(other.literals),
+        }
+    }
+}
+impl<T: Clone + Ord> IntoUnion for BTreeSet<T> {
+    fn into_union(self, other: Self) -> Self {
+        self.union(&other).cloned().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::macros::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn normalize() {
+        let form = Formula::with_clauses([
+            Clause::with_literals([key!("a"), key!("b")]),
+            Clause::with_literals([key!("b")]),
+            Clause::with_literals([key!("a")]),
+            Clause::with_literals([key!("c"), key!("d")]),
+            Clause::with_literals([key!("a"), key!("c"), key!("d")]),
+            Clause::with_literals([key!("c"), key!("d")]),
+        ]);
+        assert_eq!(form.to_string(), "a, b, a b, c d, a c d");
+        assert_eq!(form.normalize().to_string(), "a, b, c d");
+    }
 }

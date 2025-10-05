@@ -4,8 +4,8 @@
 use std::collections::BTreeSet;
 
 use crate::ast::{
-    Selector,
-    formula::{Clause, Formula},
+    JoinedBy, Selector,
+    formula::{Clause, Formula, IntoUnion},
 };
 
 pub fn to_dnf(expr: Selector, limit: usize) -> Formula {
@@ -64,8 +64,8 @@ pub fn expand(forms: impl Iterator<Item = Formula>, limit: usize) -> Formula {
         let rest = exprec(&forms[1..]);
         let cs = first
             .elements()
-            .into_iter()
-            .map(|c1| rest.elements().into_iter().map(|c2| c1.union(c2)))
+            .iter()
+            .map(|c1| rest.elements().iter().map(|c2| c1.union(c2)))
             .flatten()
             .collect();
         Formula::new(cs, first.shared().union(rest.shared()).cloned().collect())
@@ -85,9 +85,57 @@ pub fn expand(forms: impl Iterator<Item = Formula>, limit: usize) -> Formula {
             }
         }
     }
-    Formula::new(
-        res.elements().iter().cloned().collect(),
+    let res = Formula::new(
+        res.elements().clone(),
         res.shared().union(&all_shared).cloned().collect(),
     )
-    .normalize()
+    .normalize();
+
+    res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::{flatten, macros::*};
+
+    #[test]
+    fn dnf() {
+        let selector = OR!(AND!("a", "b"), AND!("c", "d"));
+        let expected_str = "a b, c d";
+
+        assert_eq!(to_dnf(flatten(selector), 100).to_string(), expected_str);
+    }
+
+    #[test]
+    fn cnf() {
+        let selector = AND!(OR!("a", "b"), OR!("c", "d"));
+        let expected_str = "a c, a d, b c, b d";
+
+        assert_eq!(to_dnf(flatten(selector), 100).to_string(), expected_str);
+    }
+
+    #[test]
+    fn nested_and() {
+        let selector = AND!(AND!("a", "b"), AND!("c", "d"));
+        let expected_str = "a b c d";
+
+        assert_eq!(to_dnf(flatten(selector), 100).to_string(), expected_str);
+    }
+
+    #[test]
+    fn sharing() {
+        let selector = AND!(AND!("a", "f", OR!("b", "e")), AND!("c", "d"));
+        let expected_str = "a b c d f, a c d e f";
+
+        assert_eq!(to_dnf(flatten(selector), 100).to_string(), expected_str);
+    }
+
+    #[test]
+    fn flatten_single_key_leaf_disjunctions() {
+        let selector = AND!(OR!("a.x", "a.y", "a.z"), "b");
+        let expected_str = "(a.x, a.y, a.z) b";
+
+        assert_eq!(to_dnf(flatten(selector), 100).to_string(), expected_str);
+    }
 }
