@@ -9,6 +9,7 @@ indexmap = "2.11.4"
 itertools = "0.14.0"
 pest = "2.8"
 pest_derive = { version = "2.8", features = ["grammar-extras"] }
+thiserror = "2.0.17"
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"

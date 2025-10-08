@@ -4,10 +4,12 @@ WS      = _{ " " | "\t" | COMMENT }
 COMMENT = _{ (("//" ~ (!NEWLINE ~ ANY)* ~ (NEWLINE | EOI)) | ("/*" ~ ("/**/" | (!"*/" ~ ANY))* ~ "*/")) }
 IGNORED = _{ (WS | NEWLINE) }
 
-single_quote_str = @{ "'" ~ ("\\\'" | (!"'" ~ ANY))* ~ "'" } // Previously, '' was an escape? Weird
-double_quote_str = @{ "\"" ~ ("\\\"" | (!"\"" ~ ANY))* ~ "\"" }
-unquoted_str     = @{ (ASCII_ALPHANUMERIC | "_" | "-" | "$" | ".")+ }
-str              = ${ single_quote_str | double_quote_str | unquoted_str }
+unquoted_str          = ${ (ASCII_ALPHANUMERIC | "_" | "-" | "$")+ }
+single_quote_str      = ${ ("\\'" | (!"'" ~ ANY))* }
+ignored_single_quotes = _{ PUSH("'") ~ single_quote_str ~ POP }
+double_quote_str      = ${ ("\\\"" | (!"\"" ~ ANY))* }
+ignored_double_quotes = _{ PUSH("\"") ~ double_quote_str ~ POP }
+str                   = ${ ignored_single_quotes | ignored_double_quotes | unquoted_str }
 
 lparen = _{ "(" }
 rparen = _{ ")" }
@@ -25,9 +27,9 @@ context   =  { "@context" }
 import    =  { "@import" }
 override  =  { "@override" }
 
-value = @{ str }
+prop_value = @{ str }
 
-simple_prop_def         = { str ~ IGNORED* ~ eq ~ IGNORED* ~ value ~ IGNORED* }
+simple_prop_def         = { str ~ IGNORED* ~ eq ~ IGNORED* ~ prop_value ~ IGNORED* }
 left_override_prof_def  = _{ override ~ IGNORED+ ~ simple_prop_def }
 right_override_prof_def = _{ simple_prop_def ~ IGNORED+ ~ override }
 overridden_prop_def     =  { left_override_prof_def | right_override_prof_def }
@@ -37,12 +39,13 @@ prop_def = { simple_prop_def | overridden_prop_def }
 // constraints:
 // a.b a.c      --- conjunction: any context containing BOTH a.b AND a.c
 // a.b, a.c     --- disjunction: any context containing EITHER a.b OR a.c
-key            = { str ~ (IGNORED* ~ dot ~ IGNORED* ~ str)* }
-conjunction    = { WS* ~ (key | selector_group) }
+key            = { str ~ IGNORED* ~ key_value? }
+key_value      = { dot ~ IGNORED* ~ str }
+conjunction    = { WS+ ~ (key | selector_group) }
 disjunction    = { WS* ~ comma ~ WS* ~ (key | selector_group) }
 selector_def   = { key ~ (conjunction | disjunction)* }
-selector       = _{ (selector_def | selector_group) }
 selector_group = { WS* ~ lparen ~ WS* ~ selector+ ~ WS* ~ rparen ~ WS* ~ selector? }
+selector       = ${ (selector_def | selector_group) }
 
 // aaa.bbb : name = "Clem"
 ctx_def = { WS* ~ selector ~ WS* ~ colon ~ WS* ~ (prop_def | constrain_stmt) }

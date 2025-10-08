@@ -137,19 +137,16 @@ type Env = HashMap<String, String>;
 /// The original source location from which a rule/property was parsed
 #[derive(Debug, Clone)]
 pub struct Origin {
-    filename: PathBuf,
-    line_number: u32,
-    char_slice: Range<u32>,
+    pub filename: PathBuf,
+    pub line_number: u32,
 }
 impl Display for Origin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}:{}:{}-{}",
+            "{}:{}",
             self.filename.to_str().unwrap(),
             self.line_number,
-            self.char_slice.start,
-            self.char_slice.end
         )
     }
 }
@@ -322,13 +319,14 @@ pub struct Constraint {
     pub key: Key,
 }
 
-#[derive(Debug)]
+#[derive(Default, Debug)]
 pub struct Nested {
     selector: Option<Selector>,
     rules: Vec<AstNode>,
 }
 impl Nested {
     pub fn set_selector(&mut self, selector: Selector) {
+        assert!(self.selector.is_none());
         self.selector = Some(selector)
     }
 
