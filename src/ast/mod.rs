@@ -1,8 +1,8 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fmt::Display,
     hash::Hash,
-    ops::{Add, Range},
+    ops::Add,
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -16,6 +16,17 @@ mod formula;
 mod parser;
 mod property;
 mod rule_tree;
+
+#[derive(thiserror::Error, Debug)]
+pub enum CcsError {
+    #[error(transparent)]
+    ParseError(#[from] parser::ParseError),
+    #[error("Circular import detected from file {0}")]
+    CircularImport(PathBuf),
+    #[error("Failed to resolve import {0}")]
+    ImportFailed(PathBuf),
+}
+pub type CcsResult<T> = Result<T, CcsError>;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Specificity {
@@ -184,7 +195,7 @@ impl Display for Selector {
 
 /// Provides a binding to paths which are used for resolving `@import` expressions
 pub trait ImportResolver {
-    fn resolve(&self, location: &PathBuf) -> String;
+    fn resolve(&self, location: &PathBuf) -> CcsResult<String>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -272,20 +283,29 @@ impl AstNode {
     pub fn resolve_imports(
         &mut self,
         resolver: Rc<dyn ImportResolver>,
-        in_progress: &mut HashSet<PathBuf>,
-    ) -> bool {
+        in_progress: &mut Vec<PathBuf>,
+    ) -> CcsResult<()> {
         use AstNode::*;
         match self {
-            Import(import) => todo!(),
+            Import(import) => {
+                if in_progress.contains(&import.location) {
+                    Err(CcsError::CircularImport(import.location.clone()))
+                } else {
+                    in_progress.push(import.location.clone());
+                    let nested = parser::parse(resolver.resolve(&import.location)?)?;
+                    import.ast = Some(Box::new(AstNode::Nested(nested)));
+                    Ok(())
+                }
+            }
             Nested(nested) => {
                 for rule in nested.rules.iter_mut() {
-                    if !rule.resolve_imports(resolver.clone(), in_progress) {
-                        return false;
+                    if let Err(err) = rule.resolve_imports(resolver.clone(), in_progress) {
+                        return Err(err);
                     }
                 }
-                true
+                Ok(())
             }
-            PropDef(..) | Constraint(..) => true,
+            PropDef(..) | Constraint(..) => Ok(()),
         }
     }
 }
@@ -293,7 +313,7 @@ impl AstNode {
 #[derive(Debug)]
 pub struct Import {
     location: PathBuf,
-    ast: Option<Box<AstNode>>, // TODO: Rc?
+    ast: Option<Box<AstNode>>,
 }
 impl Import {
     pub fn new(location: impl AsRef<Path>) -> Self {

@@ -24,9 +24,9 @@ pub enum ParseError {
     #[error("{0}")]
     Other(String),
 }
-pub type CcsResult<T> = Result<T, ParseError>;
+pub type ParseResult<T> = Result<T, ParseError>;
 
-pub fn parse(file_contents: impl AsRef<str>) -> CcsResult<Nested> {
+pub fn parse(file_contents: impl AsRef<str>) -> ParseResult<Nested> {
     let mut file = Ccs2Parser::parse(Rule::file, file_contents.as_ref())?;
 
     let contents: Pair<Rule> = file.next().unwrap();
@@ -121,7 +121,7 @@ mod nested {
                     Rule::ctx_block => nested.append(AstNode::Nested(pair.try_into()?)),
                     Rule::selector => nested.set_selector(pair.try_into()?),
                     Rule::prop_def => nested.append(AstNode::PropDef(pair.try_into()?)),
-                    _ => todo!("inner-level incomplete: {pair:#?}"),
+                    _ => Err(unsupported(pair.as_rule()))?,
                 }
             }
 
@@ -351,29 +351,29 @@ impl<'a> From<Span<'a>> for Origin {
 
 trait GetExactlyOne {
     type Item;
-    fn get_exactly_one(self) -> CcsResult<Self::Item>;
+    fn get_exactly_one(self) -> ParseResult<Self::Item>;
 }
 impl<T, I: ExactSizeIterator<Item = T>> GetExactlyOne for I {
     type Item = T;
 
-    fn get_exactly_one(mut self) -> CcsResult<Self::Item> {
+    fn get_exactly_one(mut self) -> ParseResult<Self::Item> {
         (self.len() == 1).true_or(ParseError::UnexpectedSize(1, self.len()))?;
         Ok(self.next().unwrap())
     }
 }
 
 trait TrueOr {
-    fn true_or(self, error: ParseError) -> CcsResult<Self>
+    fn true_or(self, error: ParseError) -> ParseResult<Self>
     where
         Self: Sized;
 }
 impl TrueOr for bool {
-    fn true_or(self, error: ParseError) -> CcsResult<Self> {
+    fn true_or(self, error: ParseError) -> ParseResult<Self> {
         if self { Ok(self) } else { Err(error) }
     }
 }
 
-fn expect_rule(actual: Rule, expected: Rule) -> CcsResult<()> {
+fn expect_rule(actual: Rule, expected: Rule) -> ParseResult<()> {
     (actual == expected)
         .true_or(ParseError::UnexpectedRule(expected, actual))
         .map(|_| {})
