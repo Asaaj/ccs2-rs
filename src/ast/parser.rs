@@ -7,12 +7,28 @@ use std::backtrace::Backtrace;
 #[grammar = "ast/ccs2.pest"]
 struct Ccs2Parser;
 
+macro_rules! expect_rule {
+    ($actual:expr, [$exp1:expr $(, $exps:expr)* $(,)?]) => {{
+        let expected = vec![$exp1 $(, $exps)*];
+        (expected.iter().any(|e| $actual == *e))
+            .true_or(ParseError::RuleNotInGroup(expected, $actual))
+            .map(|_| {})
+    }};
+    ($actual:expr, $expected:expr) => {
+        ($actual == $expected)
+            .true_or(ParseError::UnexpectedRule($expected, $actual))
+            .map(|_| {})
+    };
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum ParseError {
     #[error("Syntax error: {0}")]
     SyntaxError(#[from] pest::error::Error<Rule>),
     #[error("Unexpected rule: expected {0:?}, got {1:?}")]
     UnexpectedRule(Rule, Rule),
+    #[error("Unexpected rule: expected any of {0:?}, got {1:?}")]
+    RuleNotInGroup(Vec<Rule>, Rule),
     #[error("Unsupported rule: {rule:?}")]
     UnsupportedRule { rule: Rule, backtrace: Backtrace },
     #[error("Unexpected size: expected {0}, got {1}")]
@@ -30,40 +46,31 @@ pub fn parse(file_contents: impl AsRef<str>) -> CcsResult<Nested> {
 
     for pair in pairs {
         match pair.as_rule() {
-            Rule::selector => {
-                let selector: Selector = pair.try_into()?;
-                todo!("SELECTOR: {selector:#?}");
-            }
             Rule::ctx_block => nested.append(AstNode::Nested(pair.try_into()?)),
             Rule::prop_def => nested.append(AstNode::PropDef(pair.try_into()?)),
             Rule::EOI => eprintln!("EOI encountered"),
             _ => todo!("outer-level incomplete: {pair:#?}"),
         }
-        // let inner: Nested = pair.try_into()?;
-        // nested.rules.extend(inner.rules.into_iter());
     }
     eprintln!("\n\nCompleted!\n{nested:#?}");
     Ok(nested)
 }
 
 mod nested {
-    use crate::ast::Specificity;
-
     use super::*;
+    use crate::ast::{Expr, Op};
 
     impl TryFrom<Pair<'_, Rule>> for Nested {
         type Error = ParseError;
 
         fn try_from(value: Pair<'_, Rule>) -> Result<Self, Self::Error> {
-            // expect_rule(value.as_rule(), Rule::ctx_block)?;
+            expect_rule!(value.as_rule(), Rule::ctx_block)?;
             let mut nested = Nested::default();
 
             let inner = value.into_inner();
             for pair in inner {
                 match pair.as_rule() {
-                    Rule::selector => {
-                        nested.set_selector(pair.try_into()?);
-                    }
+                    Rule::selector => nested.set_selector(pair.try_into()?),
                     Rule::ctx_block => nested.append(AstNode::Nested(pair.try_into()?)),
                     Rule::prop_def => nested.append(AstNode::PropDef(pair.try_into()?)),
                     Rule::EOI => eprintln!("EOI encountered"),
@@ -75,31 +82,82 @@ mod nested {
         }
     }
 
+    /// This builds a chain of selector_components left-associatively, so the resulting expression
+    /// is nested from the left.
+    ///
+    /// Examples:
+    /// - `a.b` -> `a.b`
+    /// - `(a.b a.c), c.d` -> `OR!(AND!(a.b, a.c), c.d)`
+    /// - `c.d, (a.b a.c)` -> `OR!(c.d, AND!(a.b, a.c))`
+    /// - `a.b a.c a.d a.e` -> `AND!(AND!(AND!(a.b, a.c), a.d), a.e)`
     impl TryFrom<Pair<'_, Rule>> for Selector {
         type Error = ParseError;
 
         fn try_from(value: Pair<'_, Rule>) -> Result<Self, Self::Error> {
-            expect_rule(value.as_rule(), Rule::selector)?;
+            expect_rule!(value.as_rule(), Rule::selector)?;
 
-            eprintln!("SELECTOR: {value:#?}");
-            let inner = value.into_inner().get_exactly_one()?;
-            match inner.as_rule() {
-                Rule::selector_def => {
-                    let mut inner = inner.into_inner();
+            let mut inner = value.into_inner();
 
-                    let first_key: Key = inner.next().unwrap().try_into()?;
+            let left_component: SelectorComponent = inner.next().unwrap().try_into()?;
+            let mut left: Selector = left_component.into();
 
-                    if let Some(continuation) = inner.next() {
-                        todo!("Not parsed: {continuation:#?}");
-                    } else {
-                        Ok(Selector::Step(first_key))
+            while let Some(next_piece) = inner.next() {
+                match next_piece.as_rule() {
+                    Rule::conjunction => {
+                        let right: SelectorComponent = inner.next().unwrap().try_into()?;
+                        left = Selector::Expr(Expr::new(Op::And, [left, right.into()]));
                     }
+                    Rule::disjunction => {
+                        let right: SelectorComponent = inner.next().unwrap().try_into()?;
+                        left = Selector::Expr(Expr::new(Op::Or, [left, right.into()]));
+                    }
+                    _ => Err(unsupported(next_piece.as_rule()))?,
                 }
-                Rule::selector_group => {
-                    todo!()
-                }
-                rule => Err(unsupported(rule)),
             }
+
+            eprintln!("EXPR: {left}");
+            Ok(left)
+        }
+    }
+
+    #[derive(Debug)]
+    enum SelectorComponent {
+        SelectorDef(SelectorDef),
+        Selector(Selector),
+    }
+    impl TryFrom<Pair<'_, Rule>> for SelectorComponent {
+        type Error = ParseError;
+
+        fn try_from(value: Pair<'_, Rule>) -> Result<Self, Self::Error> {
+            expect_rule!(value.as_rule(), Rule::selector_component)?;
+
+            let inner = value.into_inner().get_exactly_one()?;
+            let res = match inner.as_rule() {
+                Rule::selector_def => Self::SelectorDef(inner.try_into()?),
+                Rule::selector => Self::Selector(inner.try_into()?),
+                _ => Err(unsupported(inner.as_rule()))?,
+            };
+            Ok(res)
+        }
+    }
+    impl From<SelectorComponent> for Selector {
+        fn from(value: SelectorComponent) -> Self {
+            match value {
+                SelectorComponent::SelectorDef(selector_def) => Self::Step(selector_def.0),
+                SelectorComponent::Selector(selector) => selector,
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct SelectorDef(Key);
+    impl TryFrom<Pair<'_, Rule>> for SelectorDef {
+        type Error = ParseError;
+
+        fn try_from(value: Pair<'_, Rule>) -> Result<Self, Self::Error> {
+            expect_rule!(value.as_rule(), Rule::selector_def)?;
+
+            Ok(Self(value.into_inner().get_exactly_one()?.try_into()?))
         }
     }
 
@@ -108,7 +166,7 @@ mod nested {
         type Error = ParseError;
 
         fn try_from(value: Pair<'_, Rule>) -> Result<Self, Self::Error> {
-            expect_rule(value.as_rule(), Rule::key)?;
+            expect_rule!(value.as_rule(), Rule::key)?;
 
             let mut inner = value.into_inner();
             let name: Unquoted = inner.next().unwrap().try_into()?;
@@ -131,7 +189,7 @@ mod nested {
         type Error = ParseError;
 
         fn try_from(value: Pair<'_, Rule>) -> Result<Self, Self::Error> {
-            expect_rule(value.as_rule(), Rule::key_value)?;
+            expect_rule!(value.as_rule(), Rule::key_value)?;
 
             let inner = value.into_inner();
             Ok(Self(inner.get_exactly_one()?.try_into()?))
@@ -146,7 +204,7 @@ mod prop_def {
         type Error = ParseError;
 
         fn try_from(value: Pair<'_, Rule>) -> Result<Self, Self::Error> {
-            expect_rule(value.as_rule(), Rule::prop_def)?;
+            expect_rule!(value.as_rule(), Rule::prop_def)?;
 
             let inner = value.into_inner().get_exactly_one()?;
             match inner.as_rule() {
@@ -200,7 +258,7 @@ mod prop_def {
         type Error = ParseError;
 
         fn try_from(value: Pair<'_, Rule>) -> Result<Self, Self::Error> {
-            expect_rule(value.as_rule(), Rule::prop_value)?;
+            expect_rule!(value.as_rule(), Rule::prop_value)?;
             let value = value.into_inner().get_exactly_one()?;
             Ok(Self(value.try_into()?))
         }
@@ -213,13 +271,14 @@ impl TryFrom<Pair<'_, Rule>> for Unquoted {
     type Error = ParseError;
 
     fn try_from(value: Pair<'_, Rule>) -> Result<Self, Self::Error> {
-        expect_rule(value.as_rule(), Rule::str)?;
+        expect_rule!(value.as_rule(), [Rule::value_str, Rule::selector_str])?;
 
         let value = value.into_inner().get_exactly_one()?;
         match value.as_rule() {
-            Rule::unquoted_str | Rule::single_quote_str | Rule::double_quote_str => {
-                Ok(Self(value.as_str().to_string()))
-            }
+            Rule::unquoted_value_str
+            | Rule::unquoted_selector_str
+            | Rule::single_quote_str
+            | Rule::double_quote_str => Ok(Self(value.as_str().to_string())),
             _ => Err(unsupported(value.as_rule())),
         }
     }
@@ -310,7 +369,7 @@ mod tests {
     test_suite! {
         basic_phrases,
         {succ: (empty, "")},
-        {succ: (import, "@import 'file'")},
+        {succ: (import_outside_block, "@import 'file'")},
         {fail: (bad_context, "@context (foo x.bar # baz)")},
         {succ: (simple_str_prop, "prop = 'val'")},
         {succ: (simple_str_prop_unquoted, "prop = val")},
@@ -319,7 +378,8 @@ mod tests {
         {succ: (unquoted_str_num_prefix, "elem.id {x = 1abc}")},
         {succ: (simple_prop_in_block, "elem.id {prop = 'val'}")},
         {fail: (bad_override, "elem.id {prop = @override 'hi'}")},
-        {succ: (conjunction_int, "a.class blah elem.id {prop=3}")},
+        {succ: (conjunction_int_1, "a blah elem {prop=3}")},
+        {succ: (conjunction_int_2, "a.class blah elem.id {prop=3}")},
         {succ: (conjunction_float, "a.class blah elem.id {prop=2.3}")},
         {succ: (conjunction_str, "a.class blah elem.id {prop=\"val\"}")},
         {fail: (conjunction_missing_block, "a.class blah elem.id prop=\"val\" }")},
@@ -393,7 +453,7 @@ mod tests {
 
     test_suite! {
         demo,
-        {succ: (demo, "prop = 'val';\nprop2 = 'val2'\nelem.id {'prop3'='val3'}")},
+        {succ: (demo, "prop = 'val';\nprop2 = 'val2'\nelem.id b.c, c.d {'prop3'='val3' prop4=val4}")},
     }
 
     fn test_impl(to_parse: &str, should_succeed: bool) -> Result<()> {
