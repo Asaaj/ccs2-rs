@@ -34,7 +34,6 @@ pub fn parse(file_contents: impl AsRef<str>) -> ParseResult<Nested> {
 
     assert_eq!(file.next().map(|p| p.as_rule()), Some(Rule::EOI));
 
-    eprintln!("\n\nCompleted!\n{nested:#?}");
     Ok(nested)
 }
 
@@ -89,6 +88,8 @@ mod keywords {
 }
 
 mod nested {
+    use pest::pratt_parser::{Assoc, Op as PrattOp, PrattParser};
+
     use super::*;
     use crate::ast::{Expr, Op};
 
@@ -151,27 +152,25 @@ mod nested {
         fn try_from(value: Pair<'_, Rule>) -> Result<Self, Self::Error> {
             expect_rule!(value.as_rule(), Rule::selector)?;
 
-            let mut inner = value.into_inner();
+            let inner = value.into_inner();
 
-            let left_component: SelectorComponent = inner.next().unwrap().try_into()?;
-            let mut left: Selector = left_component.into();
+            let pratt = PrattParser::new()
+                .op(PrattOp::infix(Rule::disjunction, Assoc::Left))
+                .op(PrattOp::infix(Rule::conjunction, Assoc::Left));
 
-            while let Some(next_piece) = inner.next() {
-                match next_piece.as_rule() {
-                    Rule::conjunction => {
-                        let right: SelectorComponent = inner.next().unwrap().try_into()?;
-                        left = Selector::Expr(Expr::new(Op::And, [left, right.into()]));
-                    }
-                    Rule::disjunction => {
-                        let right: SelectorComponent = inner.next().unwrap().try_into()?;
-                        left = Selector::Expr(Expr::new(Op::Or, [left, right.into()]));
-                    }
-                    _ => Err(unsupported(next_piece.as_rule()))?,
-                }
-            }
+            let parsed = pratt
+                .map_primary(|primary| {
+                    let component: SelectorComponent = primary.try_into().unwrap();
+                    Selector::from(component)
+                })
+                .map_infix(|lhs, op, rhs| match op.as_rule() {
+                    Rule::conjunction => Selector::Expr(Expr::new(Op::And, [lhs, rhs])),
+                    Rule::disjunction => Selector::Expr(Expr::new(Op::Or, [lhs, rhs])),
+                    _ => unreachable!(),
+                })
+                .parse(inner);
 
-            eprintln!("EXPR: {left}");
-            Ok(left)
+            Ok(parsed)
         }
     }
 
@@ -388,7 +387,9 @@ fn unsupported(rule: Rule) -> ParseError {
 
 #[cfg(test)]
 mod tests {
-    use super::parse;
+    use crate::ast::{flatten, macros::*};
+
+    use super::{ParseResult, parse};
     use anyhow::Result;
 
     macro_rules! __test_suite {
@@ -524,6 +525,28 @@ mod tests {
                 "Expected syntax error, got {res:?}"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_selector_operator_precedence() -> ParseResult<()> {
+        let example = r#"
+        a.b a.c, b.c b.d b.e {
+            prop1 = val1
+        }
+        "#;
+        let parsed = parse(example)?;
+
+        assert_eq!(parsed.rules.len(), 1);
+        let rule = parsed.rules.into_iter().next().unwrap();
+        let selector = match rule {
+            crate::ast::AstNode::Nested(nested) => flatten(nested.selector.unwrap()),
+            _ => unreachable!(),
+        };
+
+        let expected = OR!(AND!("a.b", "a.c"), AND!("b.c", "b.d", "b.e"));
+        assert_eq!(expected, flatten(selector));
+
         Ok(())
     }
 }
