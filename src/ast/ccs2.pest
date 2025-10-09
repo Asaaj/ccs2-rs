@@ -23,26 +23,22 @@ comma  = _{ "," }
 dot    = _{ "." }
 eq     = _{ "=" }
 
-// keywords
-constrain =  { "@constrain" }
-context   =  { "@context" }
-import    =  { "@import" }
-override  =  { "@override" }
+constrain =  _{ "@constrain" }
+context   =  _{ "@context" }
+import    =  _{ "@import" }
+override  =  _{ "@override" }
 
 prop_value = @{ value_str }
 
-simple_prop_def         = { selector_str ~ IGNORED* ~ eq ~ IGNORED* ~ prop_value ~ IGNORED* }
+simple_prop_def         =  { selector_str ~ IGNORED* ~ eq ~ IGNORED* ~ prop_value ~ IGNORED* }
 left_override_prof_def  = _{ override ~ IGNORED+ ~ simple_prop_def }
 right_override_prof_def = _{ simple_prop_def ~ IGNORED+ ~ override }
 overridden_prop_def     =  { left_override_prof_def | right_override_prof_def }
 
 prop_def = { simple_prop_def | overridden_prop_def }
 
-// constraints:
-// a.b a.c      --- conjunction: any context containing BOTH a.b AND a.c
-// a.b, a.c     --- disjunction: any context containing EITHER a.b OR a.c
-key                = { selector_str ~ key_value? }
-key_value          = { IGNORED* ~ dot ~ IGNORED* ~ selector_str }
+key                =  { selector_str ~ key_value? }
+key_value          =  { IGNORED* ~ dot ~ IGNORED* ~ selector_str }
 
 selector           = ${ selector_component ~ (infix ~ selector_component)* ~ IGNORED* }
 infix              = _{ conjunction | disjunction }
@@ -52,23 +48,15 @@ selector_component = ${ selector_def | selector_group }
 selector_def       = ${ key }
 selector_group     = _{ lparen ~ IGNORED* ~ selector ~ IGNORED* ~ rparen }
 
-// aaa.bbb : name = "Clem"
-ctx_def = { WS* ~ selector ~ WS* ~ colon ~ WS* ~ (prop_def | constrain_stmt) }
-// aaa.bbb { name = "Clem" }
-ctx_block = { WS* ~ selector ~ IGNORED* ~ block }
+ctx_def        = { WS* ~ selector ~ IGNORED* ~ colon ~ IGNORED* ~ (prop_def | constrain_stmt) }
+ctx_block      = { WS* ~ selector ~ IGNORED* ~ block }
+block          = _{ IGNORED* ~ lbrace ~ IGNORED* ~ block_stmt* ~ IGNORED* ~ rbrace }
 
-import_stmt = {
-    import ~ WS+ ~ ((lparen ~ IGNORED* ~ value_str ~ IGNORED* ~ rparen) | (value_str ~ WS* ~ semi*))
-}
+// TODO: Why do we need it to be parenthesized? Test ambiguity with following selector
+context_stmt   = { context ~ WS* ~ selector_group ~ semi* }
+constrain_stmt = { constrain ~ WS+ ~ selector_def ~ WS* ~ semi* }
+import_stmt    = { import ~ WS+ ~ value_str ~ WS* ~ semi* }
 
-context_stmt = {
-    context ~ WS+ ~ ((lparen ~ IGNORED* ~ selector ~ IGNORED* ~ rparen) | (selector ~ WS* ~ semi*))
-}
-
-constrain_stmt = {
-    constrain ~ WS+ ~ ((lparen ~ IGNORED* ~ selector ~ IGNORED* ~ rparen) | (selector ~ WS* ~ semi*))
-}
-
-block      = _{ IGNORED* ~ lbrace ~ IGNORED* ~ block_stmt* ~ IGNORED* ~ rbrace }
-block_stmt = _{ IGNORED* ~ (ctx_def | ctx_block | prop_def | import_stmt | constrain_stmt) ~ IGNORED* ~ semi* }
-file       = _{ SOI ~ (IGNORED* ~ context_stmt* ~ IGNORED* ~ block_stmt ~ IGNORED*)* ~ EOI }
+block_stmt     = _{ IGNORED* ~ (ctx_def | ctx_block | prop_def | import_stmt | constrain_stmt) ~ IGNORED* ~ semi* }
+file_contents  = { (IGNORED* ~ context_stmt? ~ IGNORED* ~ block_stmt ~ IGNORED*)* }
+file           = _{ SOI ~ file_contents ~ EOI }

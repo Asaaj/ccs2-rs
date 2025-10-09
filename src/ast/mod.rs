@@ -293,14 +293,12 @@ impl AstNode {
 #[derive(Debug)]
 pub struct Import {
     location: PathBuf,
-    env: Env,
     ast: Option<Box<AstNode>>, // TODO: Rc?
 }
 impl Import {
-    pub fn new(location: impl AsRef<Path>, env: Env) -> Self {
+    pub fn new(location: impl AsRef<Path>) -> Self {
         Self {
             location: location.as_ref().to_path_buf(),
-            env,
             ast: None,
         }
     }

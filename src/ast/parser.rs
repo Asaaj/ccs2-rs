@@ -7,20 +7,6 @@ use std::backtrace::Backtrace;
 #[grammar = "ast/ccs2.pest"]
 struct Ccs2Parser;
 
-macro_rules! expect_rule {
-    ($actual:expr, [$exp1:expr $(, $exps:expr)* $(,)?]) => {{
-        let expected = vec![$exp1 $(, $exps)*];
-        (expected.iter().any(|e| $actual == *e))
-            .true_or(ParseError::RuleNotInGroup(expected, $actual))
-            .map(|_| {})
-    }};
-    ($actual:expr, $expected:expr) => {
-        ($actual == $expected)
-            .true_or(ParseError::UnexpectedRule($expected, $actual))
-            .map(|_| {})
-    };
-}
-
 #[derive(thiserror::Error, Debug)]
 pub enum ParseError {
     #[error("Syntax error: {0}")]
@@ -41,19 +27,65 @@ pub enum ParseError {
 pub type CcsResult<T> = Result<T, ParseError>;
 
 pub fn parse(file_contents: impl AsRef<str>) -> CcsResult<Nested> {
-    let pairs: Vec<Pair<Rule>> = Ccs2Parser::parse(Rule::file, file_contents.as_ref())?.collect();
-    let mut nested = Nested::default();
+    let mut file = Ccs2Parser::parse(Rule::file, file_contents.as_ref())?;
 
-    for pair in pairs {
-        match pair.as_rule() {
-            Rule::ctx_block => nested.append(AstNode::Nested(pair.try_into()?)),
-            Rule::prop_def => nested.append(AstNode::PropDef(pair.try_into()?)),
-            Rule::EOI => eprintln!("EOI encountered"),
-            _ => todo!("outer-level incomplete: {pair:#?}"),
-        }
-    }
+    let contents: Pair<Rule> = file.next().unwrap();
+    let nested = contents.try_into()?;
+
+    assert_eq!(file.next().map(|p| p.as_rule()), Some(Rule::EOI));
+
     eprintln!("\n\nCompleted!\n{nested:#?}");
     Ok(nested)
+}
+
+macro_rules! expect_rule {
+    ($actual:expr, [$exp1:expr $(, $exps:expr)* $(,)?]) => {{
+        let expected = vec![$exp1 $(, $exps)*];
+        (expected.iter().any(|e| $actual == *e))
+            .true_or(ParseError::RuleNotInGroup(expected, $actual))
+            .map(|_| {})
+    }};
+    ($actual:expr, $expected:expr) => {
+        ($actual == $expected)
+            .true_or(ParseError::UnexpectedRule($expected, $actual))
+            .map(|_| {})
+    };
+}
+
+mod keywords {
+    use crate::ast::Import;
+
+    use super::*;
+
+    pub struct Context(pub Selector);
+    impl TryFrom<Pair<'_, Rule>> for Context {
+        type Error = ParseError;
+
+        fn try_from(value: Pair<'_, Rule>) -> Result<Self, Self::Error> {
+            expect_rule!(value.as_rule(), Rule::context_stmt)?;
+            Ok(Self(value.into_inner().get_exactly_one()?.try_into()?))
+        }
+    }
+
+    impl TryFrom<Pair<'_, Rule>> for Import {
+        type Error = ParseError;
+
+        fn try_from(value: Pair<'_, Rule>) -> Result<Self, Self::Error> {
+            expect_rule!(value.as_rule(), Rule::import_stmt)?;
+            let location: Unquoted = value.into_inner().get_exactly_one()?.try_into()?;
+            Ok(Self::new(location.0))
+        }
+    }
+
+    pub struct Constrain(pub nested::SelectorDef);
+    impl TryFrom<Pair<'_, Rule>> for Constrain {
+        type Error = ParseError;
+
+        fn try_from(value: Pair<'_, Rule>) -> Result<Self, Self::Error> {
+            expect_rule!(value.as_rule(), Rule::constrain_stmt)?;
+            Ok(Self(value.into_inner().get_exactly_one()?.try_into()?))
+        }
+    }
 }
 
 mod nested {
@@ -64,18 +96,41 @@ mod nested {
         type Error = ParseError;
 
         fn try_from(value: Pair<'_, Rule>) -> Result<Self, Self::Error> {
-            expect_rule!(value.as_rule(), Rule::ctx_block)?;
+            let original_rule = value.as_rule();
+            expect_rule!(
+                original_rule,
+                [Rule::ctx_block, Rule::ctx_def, Rule::file_contents]
+            )?;
             let mut nested = Nested::default();
+            let mut context: Option<keywords::Context> = None;
 
             let inner = value.into_inner();
             for pair in inner {
                 match pair.as_rule() {
-                    Rule::selector => nested.set_selector(pair.try_into()?),
+                    Rule::context_stmt => {
+                        assert!(original_rule == Rule::file_contents);
+                        assert!(context.is_none());
+                        context = Some(pair.try_into()?);
+                    }
+                    Rule::constrain_stmt => {
+                        let statement: keywords::Constrain = pair.try_into()?;
+                        nested.append(AstNode::Constraint(statement.0.0))
+                    }
+                    Rule::import_stmt => nested.append(AstNode::Import(pair.try_into()?)),
+                    Rule::ctx_def => nested.append(AstNode::Nested(pair.try_into()?)),
                     Rule::ctx_block => nested.append(AstNode::Nested(pair.try_into()?)),
+                    Rule::selector => nested.set_selector(pair.try_into()?),
                     Rule::prop_def => nested.append(AstNode::PropDef(pair.try_into()?)),
-                    Rule::EOI => eprintln!("EOI encountered"),
                     _ => todo!("inner-level incomplete: {pair:#?}"),
                 }
+            }
+
+            if let Some(context) = context {
+                eprintln!("Applying context {}", context.0);
+                let inner_nested = nested;
+                nested = Nested::default();
+                nested.set_selector(context.0);
+                nested.append(AstNode::Nested(inner_nested));
             }
 
             Ok(nested)
@@ -150,7 +205,7 @@ mod nested {
     }
 
     #[derive(Debug)]
-    struct SelectorDef(Key);
+    pub struct SelectorDef(pub Key);
     impl TryFrom<Pair<'_, Rule>> for SelectorDef {
         type Error = ParseError;
 
@@ -220,6 +275,8 @@ mod prop_def {
         type Error = ParseError;
 
         fn try_from(value: Pair<'_, Rule>) -> Result<Self, Self::Error> {
+            expect_rule!(value.as_rule(), Rule::simple_prop_def)?;
+
             let origin: Origin = value.as_span().into();
 
             let mut inner = value.into_inner();
@@ -239,15 +296,13 @@ mod prop_def {
         type Error = ParseError;
 
         fn try_from(value: Pair<'_, Rule>) -> Result<Self, Self::Error> {
-            let origin: Origin = value.as_span().into();
+            expect_rule!(value.as_rule(), Rule::overridden_prop_def)?;
 
-            let mut inner = value.into_inner();
-            let name: Unquoted = inner.next().unwrap().try_into()?;
-            let value: Value = inner.next().unwrap().try_into()?;
+            let simple_prop: SimplePropDef = value.into_inner().get_exactly_one()?.try_into()?;
             Ok(Self(PropDef {
-                name: name.0,
-                value: value.0.0,
-                origin,
+                name: simple_prop.0.name,
+                value: simple_prop.0.value,
+                origin: simple_prop.0.origin,
                 should_override: true,
             }))
         }
@@ -392,6 +447,7 @@ mod tests {
         {succ: (import_and_constrain, "@import 'file' ; @constrain foo")},
         {succ: (import_in_block, "a.class { @import 'file' }")},
         {fail: (context_in_block, "a.class { @context (foo) }")},
+        {succ: (context_outside_block, "@context (foo) a.class { }")},
         {succ: (multiple_props_in_block, "elem.id { prop = 'val'; prop2 = 31337 }")},
         {succ: (prop_val_with_quotes, "prop.'val' { p = 1; }")},
         {succ: (conjunction_disjunction, "a b, c d {p=1}")},
@@ -429,6 +485,8 @@ mod tests {
         {fail: (keyword_with_property, "foo{@overridep=1}")},
         {succ: (comment_between_keyword_and_property, "foo{@override /*hi*/ p=1}")},
         {#[ignore] succ: (import_with_quotes, "@import'asdf'")},
+        {fail: (import_without_quotes, "@importasdf")},
+        {#[ignore] succ: (constrain_with_quotes, "@constrain'asdf'")},
         {fail: (constrain_without_quotes, "@constrainasdf")},
         {succ: (weird_spacing, "@import 'asdf' \n ; \n @constrain asdf \n ; @import 'foo'  ")},
         {succ: (comment_between_import, "@import /*hi*/ 'asdf'")},
@@ -453,16 +511,19 @@ mod tests {
 
     test_suite! {
         demo,
-        {succ: (demo, "prop = 'val';\nprop2 = 'val2'\nelem.id b.c, c.d {'prop3'='val3' prop4=val4}")},
+        {succ: (demo, "prop = 'val';\nprop2 = 'val2'\nelem.id b.c, c.d : 'prop3'='val3'")},
     }
 
     fn test_impl(to_parse: &str, should_succeed: bool) -> Result<()> {
         let res = parse(to_parse);
-        assert_eq!(
-            res.is_ok(),
-            should_succeed,
-            "Unexpected parse output: {res:#?}"
-        );
+        if should_succeed {
+            assert!(res.is_ok(), "Expected success, got error: {res:?}");
+        } else {
+            assert!(
+                matches!(res, Err(super::ParseError::SyntaxError(..))),
+                "Expected syntax error, got {res:?}"
+            );
+        }
         Ok(())
     }
 }
