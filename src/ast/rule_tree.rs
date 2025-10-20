@@ -1,5 +1,5 @@
 use crate::ast::{
-    Key, Origin, Selector,
+    Key, Origin, PropDef, Selector,
     dnf::{expand, to_dnf},
     flatten,
     formula::Formula,
@@ -9,10 +9,10 @@ use crate::ast::{
 #[derive(Clone, Default)]
 pub struct RuleTreeNode {
     expand_limit: u32,
-    formula: Formula,
-    children: Vec<RuleTreeNode>,
-    props: Vec<(String, Property)>,
-    constraints: Vec<Key>,
+    pub formula: Formula,
+    pub children: Vec<RuleTreeNode>,
+    pub props: Vec<PropDef>,
+    pub constraints: Vec<Key>,
 }
 impl RuleTreeNode {
     pub fn new(formula: Formula) -> Self {
@@ -50,10 +50,12 @@ impl RuleTreeNode {
         origin: Origin,
         should_override: bool,
     ) {
-        self.props.push((
-            name.to_string(),
-            Property::new(value, origin, should_override as u32),
-        ))
+        self.props.push(PropDef {
+            name: name.to_string(),
+            value: value.to_string(),
+            origin,
+            should_override,
+        })
     }
 
     pub fn add_constraint(&mut self, key: Key) {

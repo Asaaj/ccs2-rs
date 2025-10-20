@@ -7,7 +7,6 @@ use std::{
     rc::Rc,
 };
 
-use crate::ast::rule_tree::RuleTreeNode;
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 
@@ -17,8 +16,11 @@ mod parser;
 mod property;
 mod rule_tree;
 
+pub use formula::{Clause, Formula, FormulaExpr};
+pub use rule_tree::RuleTreeNode;
+
 #[derive(thiserror::Error, Debug)]
-pub enum CcsError {
+pub enum AstError {
     #[error(transparent)]
     ParseError(#[from] parser::ParseError),
     #[error("Circular import detected from file {0}")]
@@ -26,7 +28,8 @@ pub enum CcsError {
     #[error("Failed to resolve import {0}")]
     ImportFailed(PathBuf),
 }
-pub type CcsResult<T> = Result<T, CcsError>;
+
+pub type AstResult<T> = Result<T, AstError>;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Specificity {
@@ -72,9 +75,9 @@ impl Add for Specificity {
 
 #[derive(Debug, Clone, Hash, Eq)]
 pub struct Key {
-    name: String,
-    values: Vec<String>,
-    specificity: Specificity,
+    pub name: String,
+    pub values: Vec<String>,
+    pub specificity: Specificity,
 }
 impl Key {
     pub fn new(name: impl ToString, values: impl IntoIterator<Item = String>) -> Self {
@@ -195,7 +198,7 @@ impl Display for Selector {
 
 /// Provides a binding to paths which are used for resolving `@import` expressions
 pub trait ImportResolver {
-    fn resolve(&self, location: &PathBuf) -> CcsResult<String>;
+    fn resolve(&self, location: &PathBuf) -> AstResult<String>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -284,12 +287,12 @@ impl AstNode {
         &mut self,
         resolver: Rc<dyn ImportResolver>,
         in_progress: &mut Vec<PathBuf>,
-    ) -> CcsResult<()> {
+    ) -> AstResult<()> {
         use AstNode::*;
         match self {
             Import(import) => {
                 if in_progress.contains(&import.location) {
-                    Err(CcsError::CircularImport(import.location.clone()))
+                    Err(AstError::CircularImport(import.location.clone()))
                 } else {
                     in_progress.push(import.location.clone());
                     let nested = parser::parse(resolver.resolve(&import.location)?)?;
@@ -324,7 +327,7 @@ impl Import {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PropDef {
     pub name: String,
     pub value: String,
@@ -332,9 +335,14 @@ pub struct PropDef {
     pub should_override: bool,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Constraint {
     pub key: Key,
+}
+impl From<Key> for Constraint {
+    fn from(key: Key) -> Self {
+        Self { key }
+    }
 }
 
 #[derive(Default, Debug)]

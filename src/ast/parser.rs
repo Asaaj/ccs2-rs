@@ -15,7 +15,7 @@ pub enum ParseError {
     UnexpectedRule(Rule, Rule),
     #[error("Unexpected rule: expected any of {0:?}, got {1:?}")]
     RuleNotInGroup(Vec<Rule>, Rule),
-    #[error("Unsupported rule: {rule:?}")]
+    #[error("Unsupported rule: {rule:?}\n{backtrace}")]
     UnsupportedRule { rule: Rule, backtrace: Backtrace },
     #[error("Unexpected size: expected {0}, got {1}")]
     UnexpectedSize(usize, usize),
@@ -370,12 +370,6 @@ impl TrueOr for bool {
     fn true_or(self, error: ParseError) -> ParseResult<Self> {
         if self { Ok(self) } else { Err(error) }
     }
-}
-
-fn expect_rule(actual: Rule, expected: Rule) -> ParseResult<()> {
-    (actual == expected)
-        .true_or(ParseError::UnexpectedRule(expected, actual))
-        .map(|_| {})
 }
 
 fn unsupported(rule: Rule) -> ParseError {

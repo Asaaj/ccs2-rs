@@ -1,6 +1,43 @@
 use crate::ast::{JoinedBy, Key, Specificity};
 use std::{collections::BTreeSet, fmt::Display, ops::Add};
 
+// #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+// TODO: Name
+// pub enum FormulaExpr {
+//     Formula(Formula),
+//     Clause(Clause),
+// }
+// impl FormulaExpr {
+//     pub fn is_empty(&self) -> bool {
+//         match self {
+//             FormulaExpr::Formula(formula) => formula.is_empty(),
+//             FormulaExpr::Clause(clause) => clause.is_empty(),
+//         }
+//     }
+//
+//     pub fn len(&self) -> usize {
+//         match self {
+//             FormulaExpr::Formula(formula) => formula.len(),
+//             FormulaExpr::Clause(clause) => clause.len(),
+//         }
+//     }
+//
+//     pub fn first(&self) -> usize {
+//         match self {
+//             FormulaExpr::Formula(formula) => formula.first(),
+//             FormulaExpr::Clause(clause) => clause.first(),
+//         }
+//     }
+// }
+
+pub trait FormulaExpr {
+    type Component: Clone + Into<Clause>;
+    fn is_empty(&self) -> bool;
+    fn len(&self) -> usize;
+    fn first(&self) -> Option<Self::Component>;
+    fn elements(&self) -> impl Iterator<Item = &Self::Component>;
+}
+
 /// A conjunction of literal matchers
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Clause {
@@ -35,8 +72,8 @@ impl Clause {
         self.is_subset(other) && self.literals.len() < other.literals.len()
     }
 
-    pub fn elements(&self) -> impl Iterator<Item = &Key> {
-        self.literals.iter()
+    pub fn elements(&self) -> &BTreeSet<Key> {
+        &self.literals
     }
 
     pub fn union(&self, other: &Clause) -> Clause {
@@ -75,6 +112,11 @@ impl Display for Clause {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let literals: String = self.literals.iter().joined_by(" ");
         write!(f, "{literals}")
+    }
+}
+impl From<Key> for Clause {
+    fn from(value: Key) -> Self {
+        Self::with_literal(value)
     }
 }
 
