@@ -138,4 +138,14 @@ mod tests {
 
         assert_eq!(to_dnf(flatten(selector), 100).to_string(), expected_str);
     }
+
+    #[test]
+    fn cartesian_product() {
+        let selector = AND!(OR!("a", "b", "c"), OR!("d", "e", "f"), OR!("g", "h", "i"));
+        let expected_str = "a d g, a d h, a d i, a e g, a e h, a e i, a f g, a f h, a f i, b d g, \
+                            b d h, b d i, b e g, b e h, b e i, b f g, b f h, b f i, c d g, c d h, \
+                            c d i, c e g, c e h, c e i, c f g, c f h, c f i";
+
+        assert_eq!(to_dnf(flatten(selector), 100).to_string(), expected_str);
+    }
 }
