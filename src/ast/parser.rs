@@ -91,7 +91,7 @@ mod nested {
     use pest::pratt_parser::{Assoc, Op as PrattOp, PrattParser};
 
     use super::*;
-    use crate::ast::{Expr, Op};
+    use crate::ast::{Expr, Op, flatten};
 
     impl TryFrom<Pair<'_, Rule>> for Nested {
         type Error = ParseError;
@@ -139,13 +139,16 @@ mod nested {
     }
 
     /// This builds a chain of selector_components left-associatively, so the resulting expression
-    /// is nested from the left.
+    /// is initially nested from the left. It then flattens them to make things a bit more
+    /// consistent.
     ///
     /// Examples:
     /// - `a.b` -> `a.b`
     /// - `(a.b a.c), c.d` -> `OR!(AND!(a.b, a.c), c.d)`
     /// - `c.d, (a.b a.c)` -> `OR!(c.d, AND!(a.b, a.c))`
-    /// - `a.b a.c a.d a.e` -> `AND!(AND!(AND!(a.b, a.c), a.d), a.e)`
+    /// - `a.b a.c a.d a.e`
+    ///     -> `AND!(AND!(AND!(a.b, a.c), a.d), a.e)`
+    ///     -> `AND!(a.b, a.c, a.d, a.e)`
     impl TryFrom<Pair<'_, Rule>> for Selector {
         type Error = ParseError;
 
@@ -170,6 +173,7 @@ mod nested {
                 })
                 .parse(inner);
 
+            let parsed = flatten(parsed);
             Ok(parsed)
         }
     }

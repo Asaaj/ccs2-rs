@@ -16,9 +16,9 @@ mod parser;
 mod property;
 mod rule_tree;
 
+pub use dnf::to_dnf;
 pub use formula::{Clause, Formula, FormulaExpr};
 pub use parser::parse;
-pub use dnf::to_dnf;
 pub use rule_tree::RuleTreeNode;
 
 #[derive(thiserror::Error, Debug)]
@@ -254,11 +254,11 @@ pub enum AstNode {
     Nested(Nested),
 }
 impl AstNode {
-    pub fn add_to(&mut self, build_context: &mut RuleTreeNode) {
+    pub fn add_to(&self, build_context: &mut RuleTreeNode) {
         use AstNode::*;
         match self {
             Import(import) => {
-                if let Some(ast) = import.ast.as_mut() {
+                if let Some(ast) = import.ast.as_ref() {
                     ast.add_to(build_context)
                 } else {
                     panic!("Attempted to add Import node without a resolved AST context");
@@ -274,13 +274,7 @@ impl AstNode {
                 build_context.add_constraint(key.clone());
             }
             Nested(nested) => {
-                if let Some(selector) = nested.selector.as_ref() {
-                    *build_context = build_context.traverse(selector.clone()).clone();
-                } else {
-                    for rule in nested.rules.iter_mut() {
-                        rule.add_to(build_context);
-                    }
-                }
+                nested.add_to(build_context);
             }
         }
     }
@@ -314,6 +308,17 @@ impl AstNode {
         }
     }
 }
+impl Display for AstNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use AstNode::*;
+        match self {
+            Import(import) => import.fmt(f),
+            PropDef(prop_def) => prop_def.fmt(f),
+            Constraint(key) => write!(f, "@constrain {key}"),
+            Nested(nested) => nested.fmt(f),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct Import {
@@ -328,6 +333,11 @@ impl Import {
         }
     }
 }
+impl Display for Import {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "@import '{}'", self.location.to_string_lossy())
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct PropDef {
@@ -335,6 +345,11 @@ pub struct PropDef {
     pub value: String,
     pub origin: Origin,
     pub should_override: bool,
+}
+impl Display for PropDef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "def {}", self.name)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -360,6 +375,27 @@ impl Nested {
 
     pub fn append(&mut self, rule: AstNode) {
         self.rules.push(rule)
+    }
+
+    pub fn add_to(&self, build_context: &mut RuleTreeNode) {
+        let build_context = if let Some(selector) = self.selector.as_ref() {
+            build_context.traverse(selector.clone())
+        } else {
+            build_context
+        };
+        for rule in self.rules.iter() {
+            rule.add_to(build_context);
+        }
+    }
+}
+impl Display for Nested {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let selector = self
+            .selector
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or("None".to_string());
+        write!(f, "{selector} {{ {} }}", self.rules.iter().joined_by("; "))
     }
 }
 
@@ -547,5 +583,48 @@ mod tests {
         let flattened = flatten(selector);
         assert_eq!(flattened, expected);
         assert_eq!(flattened.to_string(), "(AND (a.x, a.y, a.z) b)");
+    }
+
+    #[test]
+    fn nested_string() {
+        let ccs = r#"
+            a, f b e, c {
+                c d {
+                    x = y
+                }
+                e f {
+                    foobar = abc
+                }
+            }
+            a, c, b e f : baz = quux
+
+            x = outerx
+            baz = outerbaz
+            foobar = outerfoobar
+            noothers = val
+            
+            multi {
+                x = failure
+                level {
+                    x = success
+                }
+            }
+
+            z.underconstraint {
+                c = success
+            }
+            @constrain z.underconstraint
+            c = failure
+        "#;
+
+        // Note: This isn't 100% the same as Python, because we do an extra layer of flattening
+        // while parsing, which messes up the ordering of some of the nested selectors.
+        let expected = "None { (OR (AND f b e) a c) { (AND c d) { def x }; (AND e f) { def foobar \
+                        } }; (OR (AND b e f) a c) { def baz }; def x; def baz; def foobar; def \
+                        noothers; multi { def x; level { def x } }; z.underconstraint { def c }; \
+                        @constrain z.underconstraint; def c }";
+        let parsed = parse(ccs).unwrap();
+
+        assert_eq!(parsed.to_string(), expected);
     }
 }

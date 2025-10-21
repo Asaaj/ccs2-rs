@@ -10,7 +10,8 @@ use std::{
 use indexmap::{IndexMap, IndexSet};
 
 use crate::ast::{
-    Clause, Constraint, Expr, Formula, FormulaExpr, Key, Op, PropDef, RuleTreeNode, Specificity,
+    Clause, Constraint, Expr, Formula, FormulaExpr, JoinedBy, Key, Op, PropDef, RuleTreeNode,
+    Specificity,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -85,27 +86,44 @@ impl Dag {
         &mut self.node_data[&node]
     }
 
-    pub fn build(mut rule_tree_nodes: Vec<RuleTreeNode>) -> Self {
+    pub fn build(rule_tree_node: RuleTreeNode) -> Self {
         let mut dag = Self::default();
         let mut lit_nodes = IndexMap::<Key, Node>::default();
 
         // obviously there are better ways of gathering the unique literals and unique clauses,
         // if performance needs to be improved...
-        rule_tree_nodes.sort_by(|lhs, rhs| lhs.formula.cmp(&rhs.formula));
-        let mut all_clauses: Vec<_> = rule_tree_nodes
+        let mut sorted_formulae: Vec<_> = rule_tree_node.iter().cloned().collect();
+        sorted_formulae.sort_by(|lhs, rhs| lhs.formula.cmp(&rhs.formula));
+        eprintln!("\n\nTREES: {sorted_formulae:?}");
+
+        let mut all_clauses: Vec<_> = sorted_formulae
             .iter()
-            .flat_map(|f| f.formula.elements().union(f.formula.shared()))
+            .flat_map(|f| {
+                eprintln!(
+                    "  {{{}}} | {{{}}}",
+                    f.formula.elements().iter().joined_by(","),
+                    f.formula.shared().iter().joined_by(",")
+                );
+                let res = f.formula.elements().union(f.formula.shared());
+
+                res
+            })
             .collect();
 
-        // This dedup is very important
+        all_clauses.sort();
+        eprintln!(
+            "\n\nALL: [{}]",
+            all_clauses.iter().map(|c| format!("'{c}'")).joined_by(", ")
+        );
+
         let all_elements = all_clauses.iter().flat_map(|c| c.elements()).cloned();
+        // This dedup is very important
         for lit in IndexSet::<Key>::from_iter(all_elements) {
             lit_nodes.insert(lit.clone().into(), dag.add_literal(&lit));
         }
         eprintln!("\n\nLIT NODES: {lit_nodes:?}");
 
         let mut clause_nodes = IndexMap::<Clause, Node>::default();
-        all_clauses.sort();
         for clause in all_clauses.into_iter() {
             if !clause.is_empty() {
                 let specificity = clause.specificity();
@@ -121,7 +139,7 @@ impl Dag {
         eprintln!("\n\nCLAUSE NODES: {clause_nodes:?}");
 
         let mut form_nodes = IndexMap::<Formula, Node>::default();
-        for rule in rule_tree_nodes {
+        for rule in sorted_formulae {
             let node = if rule.formula.is_empty() {
                 dag.prop_node
             } else {
@@ -169,8 +187,10 @@ impl Dag {
         eprintln!("THESE NODES: {these_nodes:?}");
 
         if expr.len() == 1 {
+            eprintln!(">>Bail 0");
             return base_nodes[&expr.first().unwrap()].clone();
         } else if let Some(existing) = these_nodes.get(&expr) {
+            eprintln!(">>Bail 1");
             return *existing;
         } else if expr.len() == 2 {
             let mut node_data = constructor();
@@ -180,6 +200,8 @@ impl Dag {
             for el in expr.elements().iter() {
                 self.get_data_mut(base_nodes[el]).children.push(node);
             }
+            eprintln!(">>Bail 2");
+            return node;
         }
 
         let mut item_collection_indices = IndexMap::<E::Item, Vec<usize>>::default();
@@ -190,7 +212,10 @@ impl Dag {
                     "Exact equality should be handled above"
                 );
                 for el in c.elements() {
-                    item_collection_indices[el].push(i);
+                    item_collection_indices
+                        .entry(el.clone())
+                        .or_default()
+                        .push(i);
                 }
             }
         }
@@ -204,17 +229,19 @@ impl Dag {
         // algorithmic complexity as the Python implementation, which re-heapifies the ranking list
         // on every iteration. Still, this should be rethought
         let biggest_collection = |covered_elements: &BTreeSet<E::Item>| {
-            let collection_rank = |c: &E| {
-                c.elements()
+            let collection_rank = |collection: &E| {
+                collection
+                    .elements()
                     .iter()
                     .filter(|e| !covered_elements.contains(*e))
                     .count()
             };
             collections
                 .iter()
+                .filter(|collection| collection.is_subset(&expr))
                 .map(|collection| (collection_rank(collection), collection))
                 .filter(|(rank, _)| *rank != 0)
-                .max_by_key(|(rank, _)| *rank)
+                .max_by_key(|(rank, _)| *rank) // TODO: Tie?
                 .map(|(_, collection)| collection)
         };
 
@@ -252,7 +279,6 @@ trait NodeCreatorCollection: NodeCreator {
         self.len() == 0
     }
     fn elements(&self) -> &BTreeSet<Self::Item>;
-    // fn elements(&self) -> impl Iterator<Item = &Self::Item>;
     fn first(&self) -> Option<Self::Item> {
         self.elements().iter().next().cloned()
     }
@@ -282,32 +308,6 @@ impl NodeCreatorCollection for Formula {
         self.is_subset(other)
     }
 }
-
-// #[derive(Clone, PartialEq, Eq)]
-// struct Rank<E: NodeCreator> {
-//     weight: usize,
-//     elem: Rc<E>,
-// }
-// impl<E: NodeCreatorCollection> Rank<E> {
-//     fn new(elem: Rc<E>) -> Self {
-//         Self {
-//             weight: elem.len(),
-//             elem,
-//         }
-//     }
-// }
-// impl<E: NodeCreator> PartialOrd for Rank<E> {
-//     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-//         Some(self.cmp(other))
-//     }
-// }
-// impl<E: NodeCreator> Ord for Rank<E> {
-//     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-//         self.weight
-//             .cmp(&other.weight)
-//             .then_with(|| self.elem.cmp(&other.elem))
-//     }
-// }
 
 #[derive(Default, Debug)]
 struct Stats {
@@ -424,27 +424,275 @@ impl NodeData {
     }
 }
 
+#[cfg(feature = "dot")]
+pub mod dot {
+    use std::{fmt::Display, ops::AddAssign};
+
+    use crate::ast::JoinedBy;
+
+    use super::*;
+    use petgraph::{
+        dot::{Config, Dot},
+        graph::NodeIndex,
+    };
+
+    pub type DiGraph = petgraph::graph::DiGraph<StyledNode, ()>;
+
+    pub struct StyledNode {
+        id: Node,
+        label: String,
+        fillcolor: String,
+        style: String,
+        shape: String,
+    }
+    impl StyledNode {
+        pub fn new(id: Node, name: impl ToString) -> Self {
+            Self::styled(id, name, "", "", "")
+        }
+
+        pub fn styled(
+            id: Node,
+            name: impl ToString,
+            fillcolor: impl ToString,
+            style: impl ToString,
+            shape: impl ToString,
+        ) -> Self {
+            Self {
+                id,
+                label: name.to_string(),
+                fillcolor: fillcolor.to_string(),
+                style: style.to_string(),
+                shape: shape.to_string(),
+            }
+        }
+
+        pub fn to_dot(&self) -> String {
+            [
+                Self::attribute("label", &self.label),
+                Self::attribute("fillcolor", &self.fillcolor),
+                Self::attribute("style", &self.style),
+                Self::attribute("shape", &self.shape),
+            ]
+            .into_iter()
+            .joined_by(" ")
+        }
+
+        fn attribute(name: &str, value: &str) -> String {
+            if !value.is_empty() {
+                format!("{name}=\"{value}\"")
+            } else {
+                "".to_string()
+            }
+        }
+    }
+    impl Display for StyledNode {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.label)
+        }
+    }
+    impl std::fmt::Debug for StyledNode {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            Display::fmt(self, f)
+        }
+    }
+
+    impl From<&RuleTreeNode> for DiGraph {
+        fn from(value: &RuleTreeNode) -> Self {
+            let mut g = Self::new();
+
+            let mut uid = 0;
+            fn add_node(g: &mut DiGraph, n: &RuleTreeNode, uid: &mut usize) -> NodeIndex {
+                let nodeid = g.add_node(StyledNode::styled(
+                    Node(*uid),
+                    n.label(),
+                    n.color(),
+                    "filled",
+                    "box",
+                ));
+                uid.add_assign(1);
+                for c in &n.children {
+                    let child = add_node(g, c, uid);
+                    g.add_edge(nodeid, child, ());
+                }
+
+                nodeid
+            }
+            add_node(&mut g, value, &mut uid);
+
+            g
+        }
+    }
+
+    impl From<&Dag> for DiGraph {
+        fn from(dag: &Dag) -> Self {
+            let mut g = Self::new();
+            let t = IndexMap::default(); // TODO:
+
+            let mut node_mapping = IndexMap::default();
+            fn add_nodes(
+                dag: &Dag,
+                g: &mut DiGraph,
+                node_mapping: &mut IndexMap<Node, NodeIndex>,
+                t: &IndexMap<Node, usize>,
+                p: NodeIndex,
+                nodes: &[Node],
+            ) {
+                // TODO: active_only?
+                for n in nodes {
+                    let n_data = dag.get_data(*n);
+                    let (mut label, color) = if matches!(n_data.op, NodeType::Or) {
+                        let label = "V".to_string();
+                        if t.contains_key(n) {
+                            (label, "palegreen")
+                        } else {
+                            (label, "lightblue")
+                        }
+                    } else {
+                        let count = *t.get(n).unwrap_or(&n_data.tally_count);
+                        let mut label = format!("{}", n_data.tally_count);
+                        let color = if count == 0 {
+                            "palegreen"
+                        } else if count != n_data.tally_count {
+                            label = format!("{} / {}", n_data.tally_count - count, label);
+                            "mistyrose"
+                        } else {
+                            "pink2"
+                        };
+                        (label, color)
+                    };
+                    let mut style = "filled".to_string();
+                    if !n_data.props.is_empty() {
+                        label += &format!(" [{}]", n_data.props.iter().joined_by(","));
+                        style += ", bold";
+                    }
+                    let node_id = if let Some(existing) = node_mapping.get(n) {
+                        *existing
+                    } else {
+                        let node_id = g.add_node(StyledNode::styled(*n, label, color, style, ""));
+                        node_mapping.insert(*n, node_id);
+                        node_id
+                    };
+
+                    g.add_edge(p, node_id, ());
+                    add_nodes(dag, g, node_mapping, t, node_id, &n_data.children);
+                }
+            }
+
+            // These aren't real nodes in the Dag, but we want to draw them anyway
+            let mut lit_id = 1000000;
+
+            for (l, matcher) in &dag.children {
+                let lit_node = Node(lit_id);
+                lit_id += 1;
+                let node_id = g.add_node(StyledNode::new(lit_node, l));
+                node_mapping.insert(lit_node, node_id);
+                if let Some(wildcard) = matcher.wildcard {
+                    add_nodes(dag, &mut g, &mut node_mapping, &t, node_id, &[wildcard]);
+                }
+                for (v, nodes) in &matcher.positive_values {
+                    let lit_node = Node(lit_id);
+                    lit_id += 1;
+                    let node_id_2 = g.add_node(StyledNode::styled(
+                        lit_node,
+                        v,
+                        "lightyellow",
+                        "filled",
+                        "box",
+                    ));
+                    node_mapping.insert(lit_node, node_id_2);
+
+                    g.add_edge(node_id, node_id_2, ());
+                    add_nodes(dag, &mut g, &mut node_mapping, &t, node_id_2, nodes);
+                }
+            }
+
+            g
+        }
+    }
+
+    pub fn to_dot<'a>(graph: &'a DiGraph) -> Dot<'a, &'a DiGraph> {
+        Dot::with_attr_getters(
+            &graph,
+            &[Config::EdgeNoLabel, Config::NodeNoLabel],
+            &|_, _| "".to_string(),
+            &|_, (_, style)| style.to_dot(),
+        )
+    }
+
+    pub fn to_dot_str<G: Into<DiGraph>>(graph: G) -> String {
+        format!("{:?}", to_dot(&graph.into()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{flatten, macros::*, parse, to_dnf};
+    use crate::ast::{Selector, flatten, macros::*, parse, to_dnf};
 
-    macro_rules! tree {
-        ($s:expr) => {
-            RuleTreeNode::new(to_dnf($s, 100))
-        };
+    fn to_tree(expr: Selector) -> RuleTreeNode {
+        RuleTreeNode::new(to_dnf(expr, 100))
     }
 
     macro_rules! trees {
         ($s1:expr $(,$s2:expr)* $(,)?) => {
-            vec![tree!($s1), $(tree!($s2),)*]
+            vec![to_tree($s1), $(to_tree($s2),)*]
         }
     }
 
     #[test]
     fn print_simple_example() {
-        let dag = Dag::build(trees!(AND!("a", "b", "c"), AND!("a", "b", "c")));
-        dag.debug_children();
-        eprintln!("{dag:#?}");
+        todo!()
+        // let dag = Dag::build(trees!(AND!("a", "b", "c"), AND!("a", "b", "c")));
+        // dag.debug_children();
+        // eprintln!("{dag:#?}");
+    }
+
+    const MULTILEVEL_EXAMPLE: &str = r#"
+        a, f b e, c {
+            c d {
+                x = y
+            }
+            e f {
+                foobar = abc
+            }
+        }
+        a, c, b e f : baz = quux
+
+        // x = outerx
+        // baz = outerbaz
+        // foobar = outerfoobar
+        // noothers = val
+        // 
+        // multi {
+        //     x = failure
+        //     level {
+        //         x = success
+        //     }
+        // }
+
+        // z.underconstraint {
+        //     c = success
+        // }
+        // @constrain z.underconstraint
+        // c = failure
+    "#;
+
+    #[cfg(feature = "dot")]
+    #[test]
+    fn tree_to_dot() {
+        use crate::dag::dot::to_dot_str;
+
+        let n = parse(MULTILEVEL_EXAMPLE).unwrap();
+        eprintln!("Rules: {n}");
+
+        let mut tree = RuleTreeNode::default();
+        n.add_to(&mut tree);
+        // eprintln!("THE TREE: {tree:#?}");
+        println!("{}", to_dot_str(&tree));
+
+        let dag = Dag::build(tree);
+
+        // println!("\n\n========\n{dag:#?}");
+        println!("{}", to_dot_str(&dag));
     }
 }
