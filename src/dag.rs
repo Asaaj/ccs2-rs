@@ -16,6 +16,7 @@ use crate::ast::{
 #[derive(thiserror::Error, Debug)]
 pub enum DagError {}
 
+#[derive(Debug)]
 pub struct Dag {
     children: IndexMap<String, LiteralMatcher>,
     prop_node: Node,
@@ -40,9 +41,32 @@ impl Dag {
         todo!()
     }
 
+    pub fn debug_children(&self) {
+        let mut visited = Default::default();
+        for child in self.node_data.keys() {
+            self.debug_child(*child, &mut visited);
+        }
+        for (lit, matcher) in &self.children {
+            eprintln!("{lit}: {:?}", matcher);
+        }
+    }
+
+    fn debug_child(&self, node: Node, visited: &mut HashSet<Node>) {
+        if !visited.contains(&node) {
+            visited.insert(node);
+
+            let children = &self.get_data(node).children;
+            eprintln!("{node:?}: {children:?}");
+            for child in children {
+                self.debug_child(*child, visited);
+            }
+        }
+    }
+
     fn new_node(&mut self, data: NodeData) -> Node {
         let node = Node(self.next_id());
         debug_assert!(!self.node_data.contains_key(&node));
+        eprintln!("Added node: {node:?} | {data:?}");
         self.node_data.insert(node, data);
         node
     }
@@ -73,22 +97,28 @@ impl Dag {
             .flat_map(|f| f.formula.elements().union(f.formula.shared()))
             .collect();
 
-        for lit in all_clauses.iter().flat_map(|c| c.elements()) {
-            lit_nodes.insert(lit.clone().into(), dag.add_literal(lit));
+        // This dedup is very important
+        let all_elements = all_clauses.iter().flat_map(|c| c.elements()).cloned();
+        for lit in IndexSet::<Key>::from_iter(all_elements) {
+            lit_nodes.insert(lit.clone().into(), dag.add_literal(&lit));
         }
+        eprintln!("\n\nLIT NODES: {lit_nodes:?}");
+
         let mut clause_nodes = IndexMap::<Clause, Node>::default();
         all_clauses.sort();
         for clause in all_clauses.into_iter() {
             if !clause.is_empty() {
                 let specificity = clause.specificity();
-                clause_nodes[clause] = dag.build_expr(
+                let expr = dag.build_expr(
                     clause.clone(),
                     || NodeData::and(specificity),
                     &mut lit_nodes,
                     &mut clause_nodes,
-                )
+                );
+                clause_nodes.insert(clause.clone(), expr);
             }
         }
+        eprintln!("\n\nCLAUSE NODES: {clause_nodes:?}");
 
         let mut form_nodes = IndexMap::<Formula, Node>::default();
         for rule in rule_tree_nodes {
@@ -117,6 +147,7 @@ impl Dag {
         let mut node_data = NodeData::and(lit.specificity);
         node_data.add_link();
         let node = self.new_node(node_data);
+        eprintln!("LITERAL: {lit:?}");
         self.children
             .entry(lit.name.clone())
             .or_default()
@@ -133,15 +164,21 @@ impl Dag {
     ) -> Node {
         assert!(!expr.is_empty());
 
+        eprintln!("\n\nEXPR: {expr}");
+        eprintln!("BASE NODES: {base_nodes:?}");
+        eprintln!("THESE NODES: {these_nodes:?}");
+
         if expr.len() == 1 {
-            return these_nodes[&expr].clone();
+            return base_nodes[&expr.first().unwrap()].clone();
+        } else if let Some(existing) = these_nodes.get(&expr) {
+            return *existing;
         } else if expr.len() == 2 {
             let mut node_data = constructor();
             node_data.add_links(expr.len());
             let node: Node = self.new_node(node_data);
 
-            for el in expr.elements().iter().cloned() {
-                self.get_data_mut(base_nodes[&el]).children.push(node);
+            for el in expr.elements().iter() {
+                self.get_data_mut(base_nodes[el]).children.push(node);
             }
         }
 
@@ -182,7 +219,7 @@ impl Dag {
         };
 
         while let Some(best) = biggest_collection(&covered) {
-            eprintln!("BEST: {best:?}");
+            eprintln!("    best: {best:?}");
             self.get_data_mut(these_nodes[best]).children.push(node);
             self.get_data_mut(node).add_link();
             for el in best.elements() {
@@ -202,7 +239,7 @@ impl Dag {
     }
 }
 
-trait NodeCreator: Hash + Eq + Ord + Clone + std::fmt::Debug {}
+trait NodeCreator: Hash + Eq + Ord + Clone + std::fmt::Debug + std::fmt::Display {}
 impl NodeCreator for Key {}
 impl NodeCreator for Clause {}
 impl NodeCreator for Formula {}
@@ -296,18 +333,18 @@ impl LiteralMatcher {
         // individual nodes will actually end up existing either way, or alternatively on the
         // number of different sets those values appear in. this isn't a tradeoff with an
         // easy obvious answer.
+        eprintln!("Literal values: {self:?}, {node:?}, {values:?}");
         if values.len() == 0 {
-            if self.wildcard.is_some() {
-                assert!(self.wildcard.is_none());
-                self.wildcard = Some(node.clone());
-            }
+            eprintln!("  WILDCARD");
+            assert!(self.wildcard.is_none());
+            self.wildcard = Some(node.clone());
+        }
 
-            for value in values {
-                self.positive_values
-                    .entry(value)
-                    .or_default()
-                    .push(node.clone());
-            }
+        for value in values {
+            self.positive_values
+                .entry(value)
+                .or_default()
+                .push(node.clone());
         }
     }
 }
@@ -384,5 +421,30 @@ impl NodeData {
 
     fn accumulate_stats(&self, stats: &mut Stats, visited: &mut IndexSet<Node>) {
         todo!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::{flatten, macros::*, parse, to_dnf};
+
+    macro_rules! tree {
+        ($s:expr) => {
+            RuleTreeNode::new(to_dnf($s, 100))
+        };
+    }
+
+    macro_rules! trees {
+        ($s1:expr $(,$s2:expr)* $(,)?) => {
+            vec![tree!($s1), $(tree!($s2),)*]
+        }
+    }
+
+    #[test]
+    fn print_simple_example() {
+        let dag = Dag::build(trees!(AND!("a", "b", "c"), AND!("a", "b", "c")));
+        dag.debug_children();
+        eprintln!("{dag:#?}");
     }
 }

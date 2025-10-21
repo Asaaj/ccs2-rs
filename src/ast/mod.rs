@@ -17,6 +17,8 @@ mod property;
 mod rule_tree;
 
 pub use formula::{Clause, Formula, FormulaExpr};
+pub use parser::parse;
+pub use dnf::to_dnf;
 pub use rule_tree::RuleTreeNode;
 
 #[derive(thiserror::Error, Debug)]
