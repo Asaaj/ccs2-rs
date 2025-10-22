@@ -565,7 +565,9 @@ pub mod dot {
                         node_id
                     };
 
-                    g.add_edge(p, node_id, ());
+                    if !g.contains_edge(p, node_id) {
+                        g.add_edge(p, node_id, ());
+                    }
                     add_nodes(dag, g, node_mapping, t, node_id, &n_data.children);
                 }
             }
@@ -593,7 +595,9 @@ pub mod dot {
                     ));
                     node_mapping.insert(lit_node, node_id_2);
 
-                    g.add_edge(node_id, node_id_2, ());
+                    if !g.contains_edge(node_id, node_id_2) {
+                        g.add_edge(node_id, node_id_2, ());
+                    }
                     add_nodes(dag, &mut g, &mut node_mapping, &t, node_id_2, nodes);
                 }
             }
@@ -639,6 +643,31 @@ mod tests {
         };
 
         let n = crate::ast::parse(MULTILEVEL_EXAMPLE).unwrap();
+
+        let mut tree = RuleTreeNode::default();
+        n.add_to(&mut tree);
+        println!("{}", to_dot_str(&tree));
+
+        let dag = Dag::build(tree);
+        println!("{}", to_dot_str(&dag));
+    }
+
+    #[cfg(feature = "dot")]
+    #[test]
+    fn tree_to_dot_2() {
+        use crate::{
+            ast::RuleTreeNode,
+            dag::{Dag, dot::to_dot_str},
+        };
+
+        let n = crate::ast::parse(
+            r#"
+                a b c d e (f, g, h, i, j) {
+                    x = y
+                }
+            "#,
+        )
+        .unwrap();
 
         let mut tree = RuleTreeNode::default();
         n.add_to(&mut tree);
