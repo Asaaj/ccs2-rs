@@ -3,6 +3,9 @@
 
 pub mod ast;
 pub mod dag;
+pub mod search;
+
+pub use search::{Context, PropertyTracer};
 
 #[derive(thiserror::Error, Debug)]
 pub enum CcsError {

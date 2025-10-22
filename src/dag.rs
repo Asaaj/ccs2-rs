@@ -6,7 +6,8 @@ use std::{
 use indexmap::{IndexMap, IndexSet};
 
 use crate::ast::{
-    Clause, Constraint, Formula, JoinedBy, Key, Op, PropDef, RuleTreeNode, Specificity,
+    Clause, Constraint, Formula, JoinedBy, Key, Op, PersistentStr, PropDef, Property, RuleTreeNode,
+    Specificity,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -14,10 +15,10 @@ pub enum DagError {}
 
 #[derive(Debug)]
 pub struct Dag {
-    children: IndexMap<String, LiteralMatcher>,
-    prop_node: Node,
-    next_node_id: usize,
-    node_data: IndexMap<Node, NodeData>,
+    pub children: IndexMap<PersistentStr, LiteralMatcher>,
+    pub prop_node: Node,
+    pub next_node_id: usize,
+    pub node_data: IndexMap<Node, NodeData>,
 }
 impl Default for Dag {
     fn default() -> Self {
@@ -73,7 +74,7 @@ impl Dag {
         id
     }
 
-    fn get_data(&self, node: Node) -> &NodeData {
+    pub fn get_data(&self, node: Node) -> &NodeData {
         &self.node_data[&node]
     }
 
@@ -310,13 +311,13 @@ struct Stats {
 }
 
 #[derive(Debug, Default)]
-struct LiteralMatcher {
-    wildcard: Option<Node>,
-    positive_values: IndexMap<String, Vec<Node>>,
-    negative_values: Option<()>, // TODO: support this
+pub struct LiteralMatcher {
+    pub wildcard: Option<Node>,
+    pub positive_values: IndexMap<PersistentStr, Vec<Node>>,
+    pub negative_values: Option<()>, // TODO: support this
 }
 impl LiteralMatcher {
-    fn add_values(&mut self, values: Vec<String>, node: Node) {
+    fn add_values(&mut self, values: Vec<PersistentStr>, node: Node) {
         // because we find the set of unique literals prior to creating these matchers, we
         // don't currently need to worry about the added node representing being redundant.
         // each node will definitely represent a unique set of values for this name. in the
@@ -354,7 +355,7 @@ impl Node {
 }
 
 #[derive(Debug, Clone)]
-enum NodeType {
+pub enum NodeType {
     Or,
     And(Specificity),
 }
@@ -368,13 +369,13 @@ impl From<&NodeType> for Op {
 }
 
 #[derive(Debug, Clone)]
-struct NodeData {
-    children: Vec<Node>,
-    props: Vec<PropDef>,
-    constraints: Vec<Constraint>,
+pub struct NodeData {
+    pub children: Vec<Node>,
+    pub props: Vec<Property>,
+    pub constraints: Vec<Constraint>,
     /// Used for poisoning in case of OrNode
-    tally_count: usize,
-    op: NodeType,
+    pub tally_count: usize,
+    pub op: NodeType,
 }
 impl NodeData {
     fn and(specificity: Specificity) -> Self {
@@ -617,7 +618,6 @@ pub mod dot {
 
 #[cfg(test)]
 mod tests {
-
     const MULTILEVEL_EXAMPLE: &str = r#"
         a, f b e, c {
             c d {
@@ -633,9 +633,12 @@ mod tests {
     #[cfg(feature = "dot")]
     #[test]
     fn tree_to_dot() {
-        use crate::dag::dot::to_dot_str;
+        use crate::{
+            ast::RuleTreeNode,
+            dag::{Dag, dot::to_dot_str},
+        };
 
-        let n = parse(MULTILEVEL_EXAMPLE).unwrap();
+        let n = crate::ast::parse(MULTILEVEL_EXAMPLE).unwrap();
 
         let mut tree = RuleTreeNode::default();
         n.add_to(&mut tree);

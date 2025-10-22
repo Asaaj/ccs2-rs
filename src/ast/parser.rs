@@ -231,7 +231,7 @@ mod nested {
 
             let values = if let Some(value) = inner.next() {
                 let value: KeyValue = value.try_into()?;
-                vec![value.0.0]
+                vec![value.0.0.into()]
             } else {
                 vec![]
             };

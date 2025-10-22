@@ -16,9 +16,13 @@ mod parser;
 mod property;
 mod rule_tree;
 
+// TODO: Another opt-in thread safety type
+pub type PersistentStr = std::sync::Arc<str>;
+
 pub use dnf::to_dnf;
 pub use formula::{Clause, Formula};
 pub use parser::parse;
+pub use property::{Property, PropertyValue};
 pub use rule_tree::RuleTreeNode;
 
 #[derive(thiserror::Error, Debug)]
@@ -35,7 +39,7 @@ pub type AstResult<T> = Result<T, AstError>;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Specificity {
-    should_override: u32,
+    override_level: u32,
     positive: u32,
     negative: u32,
     wildcard: u32,
@@ -53,9 +57,9 @@ impl Specificity {
         Self::new(0, 0, 0, 1)
     }
 
-    pub const fn new(should_override: u32, positive: u32, negative: u32, wildcard: u32) -> Self {
+    pub const fn new(override_level: u32, positive: u32, negative: u32, wildcard: u32) -> Self {
         Self {
-            should_override,
+            override_level,
             positive,
             negative,
             wildcard,
@@ -67,7 +71,7 @@ impl Add for Specificity {
 
     fn add(self, rhs: Self) -> Self::Output {
         Self {
-            should_override: self.should_override + rhs.should_override,
+            override_level: self.override_level + rhs.override_level,
             positive: self.positive + rhs.positive,
             negative: self.negative + rhs.negative,
             wildcard: self.wildcard + rhs.wildcard,
@@ -77,34 +81,34 @@ impl Add for Specificity {
 
 #[derive(Debug, Clone, Hash, Eq)]
 pub struct Key {
-    pub name: String,
-    pub values: Vec<String>,
+    pub name: PersistentStr,
+    pub values: Vec<PersistentStr>,
     pub specificity: Specificity,
 }
 impl Key {
-    pub fn new(name: impl ToString, values: impl IntoIterator<Item = String>) -> Self {
+    pub fn new(name: impl ToString, values: impl IntoIterator<Item = PersistentStr>) -> Self {
         let mut values: Vec<_> = values.into_iter().collect();
         values.sort_unstable(); // Important: values are always sorted!
         Self {
-            name: name.to_string(),
+            name: name.to_string().into(),
             specificity: if !values.is_empty() {
                 Specificity::positive_lit()
             } else {
                 Specificity::wildcard()
             },
-            values,
+            values: values.into_iter().map(Into::into).collect(),
         }
     }
     /// Key-value parsing shouldn't be done here, really. It's done by the actual parser
     /// implementation. However, this is handy for expressivity in tests, so we'll just allow it for
     /// that.
     #[cfg(test)]
-    pub fn parse(input: impl ToString) -> Self {
-        let input = input.to_string();
+    pub fn parse(input: impl Into<PersistentStr>) -> Self {
+        let input = input.into();
         let inputs: Vec<&str> = input.split(".").collect();
         assert!(!inputs.is_empty());
         let (key, values) = &inputs.split_at(1);
-        let values: Vec<_> = values.iter().map(ToString::to_string).collect();
+        let values: Vec<_> = values.iter().map(|s| s.to_string().into()).collect();
         Self::new(key[0], values)
     }
 }
@@ -151,7 +155,7 @@ impl Display for Key {
 type Env = HashMap<String, String>;
 
 /// The original source location from which a rule/property was parsed
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Origin {
     pub filename: PathBuf,
     pub line_number: u32,
@@ -337,7 +341,7 @@ impl Display for Import {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PropDef {
     pub name: String,
     pub value: String,
@@ -405,7 +409,7 @@ pub fn flatten(expr: Selector) -> Selector {
     match expr {
         Selector::Step(k) => Selector::Step(k),
         Selector::Expr(expr) => {
-            let mut lit_children = IndexMap::<Selector, IndexSet<String>>::default();
+            let mut lit_children = IndexMap::<Selector, IndexSet<PersistentStr>>::default();
             let mut new_children = Vec::<Selector>::default();
 
             let mut add_child = |e: Selector| {
@@ -493,7 +497,7 @@ pub mod macros {
 
     macro_rules! kv_selector {
         ($item:literal $(: ($($val:literal)+))?) => {
-            crate::ast::Selector::Step(crate::ast::Key::new($item, [$($($val.to_string(),)+)?]))
+            crate::ast::Selector::Step(crate::ast::Key::new($item, [$($($val.to_string().into(),)+)?]))
         };
     }
 

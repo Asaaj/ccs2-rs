@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use crate::ast::{
-    JoinedBy, Key, Origin, PropDef, Selector,
+    JoinedBy, Key, Origin, PropDef, Property, Selector,
     dnf::{expand, to_dnf},
     flatten,
     formula::Formula,
@@ -12,7 +12,7 @@ pub struct RuleTreeNode {
     expand_limit: u32,
     pub formula: Formula,
     pub children: Vec<RuleTreeNode>,
-    pub props: Vec<PropDef>,
+    pub props: Vec<Property>,
     pub constraints: Vec<Key>,
 }
 impl Default for RuleTreeNode {
@@ -58,12 +58,15 @@ impl RuleTreeNode {
         origin: Origin,
         should_override: bool,
     ) {
-        self.props.push(PropDef {
-            name: name.to_string(),
-            value: value.to_string(),
-            origin,
-            should_override,
-        })
+        self.props.push(
+            PropDef {
+                name: name.to_string(),
+                value: value.to_string(),
+                origin,
+                should_override,
+            }
+            .into(),
+        )
     }
 
     pub fn add_constraint(&mut self, key: Key) {
@@ -125,15 +128,15 @@ mod tests {
 
     macro_rules! prop {
         ($name:literal, $value:literal, $line:literal) => {
-            PropDef {
-                name: $name.to_string(),
-                value: $value.to_string(),
-                origin: Origin {
+            Property::new(
+                $name,
+                $value,
+                Origin {
                     filename: "".into(),
                     line_number: $line as u32,
                 },
-                should_override: false,
-            }
+                false,
+            )
         };
     }
 
