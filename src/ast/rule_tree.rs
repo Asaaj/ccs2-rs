@@ -7,7 +7,7 @@ use crate::ast::{
     formula::Formula,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RuleTreeNode {
     expand_limit: u32,
     pub formula: Formula,
@@ -111,4 +111,80 @@ pub struct Stats {
     props: usize,
     constraints: usize,
     edges: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::{macros::*, parse};
+    use pretty_assertions::assert_eq;
+
+    fn formula(selector: Selector) -> Formula {
+        to_dnf(selector, 100)
+    }
+
+    macro_rules! prop {
+        ($name:literal, $value:literal, $line:literal) => {
+            PropDef {
+                name: $name.to_string(),
+                value: $value.to_string(),
+                origin: Origin {
+                    filename: "".into(),
+                    line_number: $line as u32,
+                },
+                should_override: false,
+            }
+        };
+    }
+
+    #[test]
+    fn multilevel_tree() {
+        let ccs = r#"
+            a, f b e, c {
+                c d {
+                    x = y
+                }
+                e f {
+                    foobar = abc
+                }
+            }
+            a, c, b e f : baz = quux
+        "#;
+        let n = parse(ccs).unwrap();
+        let mut tree = RuleTreeNode::default();
+        n.add_to(&mut tree);
+
+        let expected = RuleTreeNode {
+            children: vec![
+                RuleTreeNode {
+                    formula: formula(OR!("a", "c", AND!("b", "e", "f"))),
+                    children: vec![
+                        RuleTreeNode {
+                            formula: formula(AND!("c", "d")),
+                            props: vec![prop!("x", "y", 4)],
+                            ..Default::default()
+                        },
+                        RuleTreeNode {
+                            formula: formula(OR!(
+                                AND!("a", "e", "f"),
+                                AND!("b", "e", "f"),
+                                AND!("c", "e", "f")
+                            )),
+                            props: vec![prop!("foobar", "abc", 7)],
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                },
+                RuleTreeNode {
+                    formula: formula(OR!("a", "c", AND!("b", "e", "f"))),
+                    props: vec![prop!("baz", "quux", 10)],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(tree, expected);
+    }
 }

@@ -17,7 +17,7 @@ mod property;
 mod rule_tree;
 
 pub use dnf::to_dnf;
-pub use formula::{Clause, Formula, FormulaExpr};
+pub use formula::{Clause, Formula};
 pub use parser::parse;
 pub use rule_tree::RuleTreeNode;
 
@@ -151,7 +151,7 @@ impl Display for Key {
 type Env = HashMap<String, String>;
 
 /// The original source location from which a rule/property was parsed
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Origin {
     pub filename: PathBuf,
     pub line_number: u32,
@@ -339,7 +339,7 @@ impl Display for Import {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PropDef {
     pub name: String,
     pub value: String,

@@ -10,8 +10,7 @@ use std::{
 use indexmap::{IndexMap, IndexSet};
 
 use crate::ast::{
-    Clause, Constraint, Expr, Formula, FormulaExpr, JoinedBy, Key, Op, PropDef, RuleTreeNode,
-    Specificity,
+    Clause, Constraint, Expr, Formula, JoinedBy, Key, Op, PropDef, RuleTreeNode, Specificity,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -350,7 +349,7 @@ impl LiteralMatcher {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct Node(usize);
+pub struct Node(usize);
 
 impl Node {
     fn and(dag: &mut Dag, specificity: Specificity) -> Self {
@@ -629,24 +628,6 @@ mod tests {
     use super::*;
     use crate::ast::{Selector, flatten, macros::*, parse, to_dnf};
 
-    fn to_tree(expr: Selector) -> RuleTreeNode {
-        RuleTreeNode::new(to_dnf(expr, 100))
-    }
-
-    macro_rules! trees {
-        ($s1:expr $(,$s2:expr)* $(,)?) => {
-            vec![to_tree($s1), $(to_tree($s2),)*]
-        }
-    }
-
-    #[test]
-    fn print_simple_example() {
-        todo!()
-        // let dag = Dag::build(trees!(AND!("a", "b", "c"), AND!("a", "b", "c")));
-        // dag.debug_children();
-        // eprintln!("{dag:#?}");
-    }
-
     const MULTILEVEL_EXAMPLE: &str = r#"
         a, f b e, c {
             c d {
@@ -657,24 +638,6 @@ mod tests {
             }
         }
         a, c, b e f : baz = quux
-
-        // x = outerx
-        // baz = outerbaz
-        // foobar = outerfoobar
-        // noothers = val
-        // 
-        // multi {
-        //     x = failure
-        //     level {
-        //         x = success
-        //     }
-        // }
-
-        // z.underconstraint {
-        //     c = success
-        // }
-        // @constrain z.underconstraint
-        // c = failure
     "#;
 
     #[cfg(feature = "dot")]
@@ -683,16 +646,12 @@ mod tests {
         use crate::dag::dot::to_dot_str;
 
         let n = parse(MULTILEVEL_EXAMPLE).unwrap();
-        eprintln!("Rules: {n}");
 
         let mut tree = RuleTreeNode::default();
         n.add_to(&mut tree);
-        // eprintln!("THE TREE: {tree:#?}");
         println!("{}", to_dot_str(&tree));
 
         let dag = Dag::build(tree);
-
-        // println!("\n\n========\n{dag:#?}");
         println!("{}", to_dot_str(&dag));
     }
 }
