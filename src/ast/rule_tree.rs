@@ -36,7 +36,7 @@ impl RuleTreeNode {
     }
 
     pub fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = &'a RuleTreeNode> + 'a> {
-        Box::new(std::iter::once(self).chain(self.children.iter().map(|c| c.iter()).flatten()))
+        Box::new(std::iter::once(self).chain(self.children.iter().flat_map(|c| c.iter())))
     }
 
     pub fn traverse(&mut self, selector: Selector) -> &mut RuleTreeNode {

@@ -157,7 +157,7 @@ impl Formula {
     pub fn normalize(self) -> Self {
         let mut minimized = BTreeSet::<Clause>::default();
         for c in self.clauses.into_iter() {
-            minimized = minimized.into_iter().filter(|s| !subsumes(&c, s)).collect();
+            minimized.retain(|s| !subsumes(&c, s));
             if !minimized.iter().any(|s| subsumes(s, &c)) {
                 minimized.insert(c);
             }

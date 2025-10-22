@@ -139,7 +139,7 @@ impl Display for Key {
                 .joined_by(", ");
             write!(f, "({})", vals_str)
         } else if let Some(first) = self.values.first()
-            && first != ""
+            && !first.is_empty()
         {
             write!(f, "{}.{first}", self.name)
         } else {
@@ -298,9 +298,7 @@ impl AstNode {
             }
             Nested(nested) => {
                 for rule in nested.rules.iter_mut() {
-                    if let Err(err) = rule.resolve_imports(resolver.clone(), in_progress) {
-                        return Err(err);
-                    }
+                    rule.resolve_imports(resolver.clone(), in_progress)?
                 }
                 Ok(())
             }

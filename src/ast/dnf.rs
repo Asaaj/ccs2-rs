@@ -4,8 +4,8 @@
 use std::collections::BTreeSet;
 
 use crate::ast::{
-    JoinedBy, Selector,
-    formula::{Clause, Formula, IntoUnion},
+    Selector,
+    formula::{Clause, Formula},
 };
 
 pub fn to_dnf(expr: Selector, limit: usize) -> Formula {
@@ -57,7 +57,7 @@ pub fn expand(forms: impl Iterator<Item = Formula>, limit: usize) -> Formula {
 
     // next, perform the expansion...
     fn exprec(forms: &[Formula]) -> Formula {
-        if forms.len() == 0 {
+        if forms.is_empty() {
             return Formula::default();
         }
         let first = forms.first().unwrap();
@@ -84,13 +84,12 @@ pub fn expand(forms: impl Iterator<Item = Formula>, limit: usize) -> Formula {
             }
         }
     }
-    let res = Formula::new(
+
+    Formula::new(
         res.elements().clone(),
         res.shared().union(&all_shared).cloned().collect(),
     )
-    .normalize();
-
-    res
+    .normalize()
 }
 
 #[cfg(test)]

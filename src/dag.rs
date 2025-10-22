@@ -1,16 +1,12 @@
 use std::{
-    borrow::Borrow,
-    cell::{Cell, Ref, RefCell},
-    collections::{BTreeSet, BinaryHeap, HashSet},
+    collections::{BTreeSet, HashSet},
     hash::Hash,
-    ops::{Deref, DerefMut},
-    rc::Rc,
 };
 
 use indexmap::{IndexMap, IndexSet};
 
 use crate::ast::{
-    Clause, Constraint, Expr, Formula, JoinedBy, Key, Op, PropDef, RuleTreeNode, Specificity,
+    Clause, Constraint, Formula, JoinedBy, Key, Op, PropDef, RuleTreeNode, Specificity,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -103,9 +99,8 @@ impl Dag {
                     f.formula.elements().iter().joined_by(","),
                     f.formula.shared().iter().joined_by(",")
                 );
-                let res = f.formula.elements().union(f.formula.shared());
 
-                res
+                f.formula.elements().union(f.formula.shared())
             })
             .collect();
 
@@ -118,7 +113,7 @@ impl Dag {
         let all_elements = all_clauses.iter().flat_map(|c| c.elements()).cloned();
         // This dedup is very important
         for lit in IndexSet::<Key>::from_iter(all_elements) {
-            lit_nodes.insert(lit.clone().into(), dag.add_literal(&lit));
+            lit_nodes.insert(lit.clone(), dag.add_literal(&lit));
         }
         eprintln!("\n\nLIT NODES: {lit_nodes:?}");
 
@@ -144,7 +139,7 @@ impl Dag {
             } else {
                 let node = dag.build_expr(
                     rule.formula.clone(),
-                    || NodeData::or(),
+                    NodeData::or,
                     &mut clause_nodes,
                     &mut form_nodes,
                 );
@@ -187,7 +182,7 @@ impl Dag {
 
         if expr.len() == 1 {
             eprintln!(">>Bail 0");
-            return base_nodes[&expr.first().unwrap()].clone();
+            return base_nodes[&expr.first().unwrap()];
         } else if let Some(existing) = these_nodes.get(&expr) {
             eprintln!(">>Bail 1");
             return *existing;
@@ -333,17 +328,14 @@ impl LiteralMatcher {
         // number of different sets those values appear in. this isn't a tradeoff with an
         // easy obvious answer.
         eprintln!("Literal values: {self:?}, {node:?}, {values:?}");
-        if values.len() == 0 {
+        if values.is_empty() {
             eprintln!("  WILDCARD");
             assert!(self.wildcard.is_none());
-            self.wildcard = Some(node.clone());
+            self.wildcard = Some(node);
         }
 
         for value in values {
-            self.positive_values
-                .entry(value)
-                .or_default()
-                .push(node.clone());
+            self.positive_values.entry(value).or_default().push(node);
         }
     }
 }
@@ -625,8 +617,6 @@ pub mod dot {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::ast::{Selector, flatten, macros::*, parse, to_dnf};
 
     const MULTILEVEL_EXAMPLE: &str = r#"
         a, f b e, c {
