@@ -6,9 +6,6 @@ use crate::ast::{
     Clause, Constraint, Formula, Key, Op, PersistentStr, Property, RuleTreeNode, Specificity,
 };
 
-#[derive(thiserror::Error, Debug)]
-pub enum DagError {}
-
 #[derive(Debug)]
 pub struct Dag {
     pub children: IndexMap<PersistentStr, LiteralMatcher>,

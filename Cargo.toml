@@ -1,20 +1,26 @@
 [package]
-name = "ccs2-rs"
+name = "ccs2"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0"
-indexmap = "2.11.4"
-itertools = "0.14.0"
+humantime = { version = "2", optional = true }
+indexmap = "2.11"
+itertools = "0.14"
+log = { version = "0.4", optional = true }
 pest = "2.8"
 pest_derive = { version = "2.8", features = ["grammar-extras"] }
 petgraph = { version = "0.8", optional = true }
-rpds = "1.1.2"
-thiserror = "2.0.17"
+rpds = "1.1"
+thiserror = "2.0"
 
 [features]
+default = ["log", "extra_conversions"]
 dot = ["petgraph"]
+log = ["dep:log"]
+extra_conversions = ["humantime"]
 
 [dev-dependencies]
-pretty_assertions = "1.4.1"
+anyhow = "1.0"
+env_logger = "0.11"
+pretty_assertions = "1.4"

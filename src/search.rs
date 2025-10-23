@@ -3,6 +3,7 @@ use std::{collections::VecDeque, fmt::Display};
 use crate::{
     ast::{self, Constraint, JoinedBy, Key, PersistentStr, Property, PropertyValue, Specificity},
     dag::{self, Node, NodeType},
+    tracer::PropertyTracer,
 };
 
 // TODO: Make thread-safety opt-in? These should be the only changes...
@@ -12,8 +13,11 @@ type PersistentSet<T> = rpds::HashTrieSetSync<T>;
 type PersistentMap<K, V> = rpds::HashTrieMapSync<K, V>;
 type Dag = std::sync::Arc<crate::dag::Dag>;
 
+/// Represents a problem finding a property in the current context
+///
+/// See [`SearchResult`]
 #[derive(thiserror::Error, Debug)]
-pub enum ContextError {
+pub enum SearchError {
     #[error("Failed to find property '{0}' {1}")]
     MissingPropertyError(String, DisplayContext),
     #[error("Property '{0}' has no values {1}")]
@@ -22,20 +26,35 @@ pub enum ContextError {
     AmbiguousPropertyError(usize, String, DisplayContext),
 }
 
-type Result<T> = std::result::Result<T, ContextError>;
+pub type SearchResult<T> = std::result::Result<T, SearchError>;
 
+/// A public-facing [`Key`] converter, which allows creating a valid `Key` for constraints
+///
+/// Currently we only support standalone `Key`s, or key-value pairs (via 2-tuples).
+pub trait AsKey {
+    fn as_key(&self) -> Key;
+}
+
+impl AsKey for &str {
+    fn as_key(&self) -> Key {
+        Key::new_lit(self, [])
+    }
+}
+
+impl<T: AsRef<str>, U: AsRef<str>> AsKey for (T, U) {
+    fn as_key(&self) -> Key {
+        Key::new_lit(self.0.as_ref(), [self.1.as_ref().into()])
+    }
+}
+
+#[derive(Clone)]
 pub struct Context<Acc: Accumulator, Tracer: PropertyTracer> {
     dag: Dag,
     tracer: Tracer,
     state: ContextState<Acc>,
 }
-impl Context<MaxAccumulator, NullTracer> {
-    pub fn from_ccs(ccs: impl AsRef<str>) -> crate::CcsResult<Self> {
-        Self::from_ccs_with_tracer(ccs, NullTracer {})
-    }
-}
 impl<Acc: Accumulator, Tracer: PropertyTracer> Context<Acc, Tracer> {
-    pub fn from_ccs_with_tracer(ccs: impl AsRef<str>, tracer: Tracer) -> crate::CcsResult<Self> {
+    pub fn from_ccs_with_tracer(ccs: impl AsRef<str>, tracer: Tracer) -> crate::AstResult<Self> {
         let rules = ast::parse(ccs)?;
         let mut tree = ast::RuleTreeNode::default();
         rules.add_to(&mut tree);
@@ -49,36 +68,31 @@ impl<Acc: Accumulator, Tracer: PropertyTracer> Context<Acc, Tracer> {
         .augment_all([], true))
     }
 
-    pub fn augment(&self, key: impl AsRef<str>) -> Self {
-        let key = Key::new_lit(key.as_ref(), []);
-        self.augment_all([key], false)
+    pub fn augment(&self, key: impl AsKey) -> Self {
+        let key = key.as_key();
+        self.augment_all([key.clone()], false)
     }
 
-    pub fn augment_value(&self, key: impl AsRef<str>, value: impl AsRef<str>) -> Self {
-        let key = Key::new_lit(key.as_ref(), [value.as_ref().into()]);
-        self.augment_all([key], false)
-    }
-
-    pub fn get_single_property(&self, prop: impl AsRef<str>) -> Result<PropertyValue> {
+    pub fn get_single_property(&self, prop: impl AsRef<str>) -> SearchResult<PropertyValue> {
         let prop = prop.as_ref().to_string();
 
         let contenders = self.state.props.get(prop.as_str());
         let mut properties = match contenders {
             Some(contenders) => contenders.values(),
             None => {
-                return Err(ContextError::MissingPropertyError(
+                return Err(SearchError::MissingPropertyError(
                     prop,
                     self.state.display_context(),
                 ));
             }
         };
         if properties.len() == 0 {
-            Err(ContextError::EmptyPropertyError(
+            Err(SearchError::EmptyPropertyError(
                 prop,
                 self.state.display_context(),
             ))
         } else if properties.len() > 1 {
-            Err(ContextError::AmbiguousPropertyError(
+            Err(SearchError::AmbiguousPropertyError(
                 properties.len(),
                 prop,
                 self.state.display_context(),
@@ -91,7 +105,7 @@ impl<Acc: Accumulator, Tracer: PropertyTracer> Context<Acc, Tracer> {
         }
     }
 
-    pub fn get_single_value(&self, prop: impl AsRef<str>) -> Result<PersistentStr> {
+    pub fn get_single_value(&self, prop: impl AsRef<str>) -> SearchResult<PersistentStr> {
         Ok(self.get_single_property(prop)?.value.clone())
     }
 
@@ -111,6 +125,11 @@ impl<Acc: Accumulator, Tracer: PropertyTracer> Context<Acc, Tracer> {
         let mut state = self.state.clone();
 
         let mut keys = CurrentConstraints::from_iter(keys.into_iter().map(Into::into));
+        // Only add the initial keys to this context; don't want to track activations
+        for key in keys.iter().cloned() {
+            state.debug_context = state.debug_context.enqueue(key);
+        }
+
         if activate_root {
             let prop_node = self.dag.get_data(self.dag.prop_node);
             let root_constraints = VecDeque::from_iter(prop_node.constraints.iter().cloned());
@@ -126,8 +145,16 @@ impl<Acc: Accumulator, Tracer: PropertyTracer> Context<Acc, Tracer> {
         self.with_new_state(state)
     }
 
+    pub fn get_debug_context(&self) -> DisplayContext {
+        self.state.display_context()
+    }
+
+    pub fn get_dag_stats(&self) -> dag::Stats {
+        self.dag.stats()
+    }
+
     #[cfg(feature = "dot")]
-    pub fn to_dot_str(&self) -> String {
+    pub fn dag_to_dot_str(&self) -> String {
         use crate::dag::dot::*;
         let digraph = dag_to_digraph(&self.dag, &self.state.tallies);
         format!("{:?}", to_dot(&digraph))
@@ -189,15 +216,6 @@ impl Default for MaxAccumulator {
             values: Default::default(),
         }
     }
-}
-
-pub trait PropertyTracer: Clone {
-    fn trace(&self, name: &str, value: &PropertyValue, context: DisplayContext);
-}
-#[derive(Clone)]
-pub struct NullTracer();
-impl PropertyTracer for NullTracer {
-    fn trace(&self, _name: &str, _value: &PropertyValue, _context: DisplayContext) {}
 }
 
 pub type Tallies = PersistentMap<Node, usize>;
@@ -414,7 +432,9 @@ impl<Acc: Accumulator> ContextState<Acc> {
     }
 }
 
-pub struct DisplayContext(PersistentQueue<Constraint>);
+/// Contains the constraints which have been applied to the current context. Formats nicely for
+/// debugging and logging.
+pub struct DisplayContext(pub PersistentQueue<Constraint>);
 impl Display for DisplayContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "in context: [ {} ]", self.0.iter().joined_by(" > "))
@@ -429,6 +449,13 @@ impl std::fmt::Debug for DisplayContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tracer::NullTracer;
+
+    impl Context<MaxAccumulator, NullTracer> {
+        pub fn from_ccs(ccs: impl AsRef<str>) -> crate::AstResult<Self> {
+            Self::from_ccs_with_tracer(ccs, NullTracer {})
+        }
+    }
 
     #[test]
     fn get_single_value() {
@@ -445,12 +472,12 @@ mod tests {
 
         assert!(matches!(
             ctx.get_single_value("a"),
-            Err(ContextError::AmbiguousPropertyError(2, ..))
+            Err(SearchError::AmbiguousPropertyError(2, ..))
         ));
 
         assert!(matches!(
             ctx.get_single_value("b"),
-            Err(ContextError::MissingPropertyError(..))
+            Err(SearchError::MissingPropertyError(..))
         ));
 
         assert_eq!(&*ctx.get_single_value("c").unwrap(), "4.3");
@@ -540,6 +567,6 @@ mod dot_examples {
             "#;
         let context = Context::from_ccs(ccs).unwrap();
         let context = context.augment_all([key!("b"), key!("d")], false);
-        println!("{}", context.to_dot_str());
+        println!("{}", context.dag_to_dot_str());
     }
 }

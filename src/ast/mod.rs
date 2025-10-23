@@ -17,6 +17,7 @@ mod property;
 mod rule_tree;
 
 // TODO: Another opt-in thread safety type
+/// A shared string reference, used internally for keys and properties
 pub type PersistentStr = std::sync::Arc<str>;
 
 pub use dnf::to_dnf;
@@ -28,6 +29,9 @@ pub fn parse(file_contents: impl AsRef<str>) -> AstResult<Nested> {
     parser::parse(file_contents).map_err(Into::into)
 }
 
+/// A common error type for all of the things that can go wrong while parsing and building the AST
+///
+/// See [`AstResult`]
 #[derive(thiserror::Error, Debug)]
 pub enum AstError {
     #[error(transparent)]
@@ -511,7 +515,7 @@ impl<S: ToString, T: Iterator<Item = S>> JoinedBy for T {
 }
 
 pub mod macros {
-    #![allow(unused)] // Mostly just used by tests, but kind handy for expressivity
+    #![allow(unused)] // Mostly just used by tests, but pretty handy for expressivity
 
     macro_rules! selector {
         ($item:literal) => {
