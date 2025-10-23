@@ -73,15 +73,20 @@ impl RuleTreeNode {
         self.constraints.push(key);
     }
 
-    fn accumulate_stats(self, mut stats: Stats) -> Stats {
+    pub fn stats(&self) -> Stats {
+        let mut stats = Stats::default();
+        self.accumulate_stats(&mut stats);
+        stats
+    }
+
+    fn accumulate_stats(&self, stats: &mut Stats) {
         stats.nodes += 1;
         stats.props += self.props.len();
         stats.constraints += self.constraints.len();
         stats.edges += self.children.len();
-        for node in self.children {
-            stats = node.accumulate_stats(stats);
+        for node in &self.children {
+            node.accumulate_stats(stats);
         }
-        stats
     }
 
     pub fn label(&self) -> String {
@@ -109,6 +114,7 @@ impl Display for RuleTreeNode {
     }
 }
 
+#[derive(Default, Debug)]
 pub struct Stats {
     nodes: usize,
     props: usize,

@@ -82,7 +82,7 @@ impl Add for Specificity {
     }
 }
 
-#[derive(Debug, Clone, Hash, Eq)]
+#[derive(Debug, Clone, Eq)]
 pub struct Key {
     pub name: PersistentStr,
     pub values: Vec<PersistentStr>,
@@ -131,6 +131,15 @@ impl Key {
         Self::new(key[0], values)
     }
 }
+impl Hash for Key {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Hash implementation needs to parallel PartialEq implementation, so we can't hash the
+        // specificity here unless we include it there. Does that matter?
+        self.name.hash(state);
+        self.values.hash(state);
+        // self.specificity.hash(state);
+    }
+}
 impl PartialEq for Key {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name && self.values == other.values
@@ -171,7 +180,7 @@ impl Display for Key {
     }
 }
 
-type Env = HashMap<String, String>;
+pub type Env = HashMap<String, String>;
 
 /// The original source location from which a rule/property was parsed
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -223,7 +232,7 @@ impl Display for Selector {
 
 /// Provides a binding to paths which are used for resolving `@import` expressions
 pub trait ImportResolver {
-    fn resolve(&self, location: &PathBuf) -> AstResult<String>;
+    fn resolve(&self, location: &Path) -> AstResult<String>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

@@ -10,7 +10,7 @@ struct Ccs2Parser;
 #[derive(thiserror::Error, Debug)]
 pub enum ParseError {
     #[error("Syntax error: {0}")]
-    SyntaxError(#[from] pest::error::Error<Rule>),
+    SyntaxError(#[from] Box<pest::error::Error<Rule>>),
     #[error("Unexpected rule: expected {0:?}, got {1:?}")]
     UnexpectedRule(Rule, Rule),
     #[error("Unexpected rule: expected any of {0:?}, got {1:?}")]
@@ -27,7 +27,7 @@ pub enum ParseError {
 pub type ParseResult<T> = Result<T, ParseError>;
 
 pub fn parse(file_contents: impl AsRef<str>) -> ParseResult<Nested> {
-    let mut file = Ccs2Parser::parse(Rule::file, file_contents.as_ref())?;
+    let mut file = Ccs2Parser::parse(Rule::file, file_contents.as_ref()).map_err(Box::new)?;
 
     let contents: Pair<Rule> = file.next().unwrap();
     let nested = contents.try_into()?;
@@ -127,7 +127,6 @@ mod nested {
             }
 
             if let Some(context) = context {
-                eprintln!("Applying context {}", context.0);
                 let inner_nested = nested;
                 nested = Nested::default();
                 nested.set_selector(context.0);
@@ -147,8 +146,8 @@ mod nested {
     /// - `(a.b a.c), c.d` -> `OR!(AND!(a.b, a.c), c.d)`
     /// - `c.d, (a.b a.c)` -> `OR!(c.d, AND!(a.b, a.c))`
     /// - `a.b a.c a.d a.e`
-    ///     -> `AND!(AND!(AND!(a.b, a.c), a.d), a.e)`
-    ///     -> `AND!(a.b, a.c, a.d, a.e)`
+    ///   -> `AND!(AND!(AND!(a.b, a.c), a.d), a.e)`
+    ///   -> `AND!(a.b, a.c, a.d, a.e)`
     impl TryFrom<Pair<'_, Rule>> for Selector {
         type Error = ParseError;
 

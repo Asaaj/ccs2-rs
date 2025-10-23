@@ -1,5 +1,5 @@
 use crate::ast::{JoinedBy, Key, Specificity};
-use std::{collections::BTreeSet, fmt::Display, ops::Add};
+use std::{collections::BTreeSet, fmt::Display, hash::Hash, ops::Add};
 
 /// A conjunction of literal matchers
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
@@ -83,7 +83,7 @@ impl From<Key> for Clause {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash)]
+#[derive(Clone, Debug, Eq)]
 pub struct Formula {
     clauses: BTreeSet<Clause>,
     shared: BTreeSet<Clause>,
@@ -173,6 +173,11 @@ impl Formula {
             clauses: minimized,
             shared,
         }
+    }
+}
+impl Hash for Formula {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.clauses.hash(state);
     }
 }
 impl PartialEq for Formula {

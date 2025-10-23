@@ -1,13 +1,9 @@
-use std::{
-    collections::{BTreeSet, HashSet},
-    hash::Hash,
-};
+use std::{collections::BTreeSet, fmt::Display, hash::Hash};
 
 use indexmap::{IndexMap, IndexSet};
 
 use crate::ast::{
-    Clause, Constraint, Formula, JoinedBy, Key, Op, PersistentStr, Property, RuleTreeNode,
-    Specificity,
+    Clause, Constraint, Formula, Key, Op, PersistentStr, Property, RuleTreeNode, Specificity,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -29,41 +25,36 @@ impl Default for Dag {
             node_data: IndexMap::default(),
         };
 
-        dag.prop_node = Node::or(&mut dag);
+        dag.prop_node = dag.new_node(NodeData::or());
         dag
     }
 }
 impl Dag {
     pub fn stats(&self) -> Stats {
-        todo!()
-    }
-
-    pub fn debug_children(&self) {
+        let mut stats = Stats::default();
         let mut visited = Default::default();
-        for child in self.node_data.keys() {
-            self.debug_child(*child, &mut visited);
-        }
-        for (lit, matcher) in &self.children {
-            eprintln!("{lit}: {:?}", matcher);
-        }
-    }
 
-    fn debug_child(&self, node: Node, visited: &mut HashSet<Node>) {
-        if !visited.contains(&node) {
-            visited.insert(node);
+        self.prop_node
+            .accumulate_stats(self, &mut stats, &mut visited);
 
-            let children = &self.get_data(node).children;
-            eprintln!("{node:?}: {children:?}");
-            for child in children {
-                self.debug_child(*child, visited);
+        for (_, matcher) in &self.children {
+            stats.literals += 1;
+            if let Some(wildcard) = matcher.wildcard {
+                wildcard.accumulate_stats(self, &mut stats, &mut visited);
             }
+            for (_, nodes) in &matcher.positive_values {
+                for node in nodes {
+                    node.accumulate_stats(self, &mut stats, &mut visited);
+                }
+            }
+            // TODO: handle negatives as well
         }
+        stats
     }
 
     fn new_node(&mut self, data: NodeData) -> Node {
         let node = Node(self.next_id());
         debug_assert!(!self.node_data.contains_key(&node));
-        eprintln!("Added node: {node:?} | {data:?}");
         self.node_data.insert(node, data);
         node
     }
@@ -90,33 +81,19 @@ impl Dag {
         // if performance needs to be improved...
         let mut sorted_formulae: Vec<_> = rule_tree_node.iter().cloned().collect();
         sorted_formulae.sort_by(|lhs, rhs| lhs.formula.cmp(&rhs.formula));
-        eprintln!("\n\nTREES: {sorted_formulae:?}");
 
         let mut all_clauses: Vec<_> = sorted_formulae
             .iter()
-            .flat_map(|f| {
-                eprintln!(
-                    "  {{{}}} | {{{}}}",
-                    f.formula.elements().iter().joined_by(","),
-                    f.formula.shared().iter().joined_by(",")
-                );
-
-                f.formula.elements().union(f.formula.shared())
-            })
+            .flat_map(|f| f.formula.elements().union(f.formula.shared()))
             .collect();
 
         all_clauses.sort();
-        eprintln!(
-            "\n\nALL: [{}]",
-            all_clauses.iter().map(|c| format!("'{c}'")).joined_by(", ")
-        );
 
         let all_elements = all_clauses.iter().flat_map(|c| c.elements()).cloned();
         // This dedup is very important
         for lit in IndexSet::<Key>::from_iter(all_elements) {
             lit_nodes.insert(lit.clone(), dag.add_literal(&lit));
         }
-        eprintln!("\n\nLIT NODES: {lit_nodes:?}");
 
         let mut clause_nodes = IndexMap::<Clause, Node>::default();
         for clause in all_clauses.into_iter() {
@@ -131,7 +108,6 @@ impl Dag {
                 clause_nodes.insert(clause.clone(), expr);
             }
         }
-        eprintln!("\n\nCLAUSE NODES: {clause_nodes:?}");
 
         let mut form_nodes = IndexMap::<Formula, Node>::default();
         for rule in sorted_formulae {
@@ -160,7 +136,6 @@ impl Dag {
         let mut node_data = NodeData::and(lit.specificity);
         node_data.add_link();
         let node = self.new_node(node_data);
-        eprintln!("LITERAL: {lit:?}");
         self.children
             .entry(lit.name.clone())
             .or_default()
@@ -177,15 +152,9 @@ impl Dag {
     ) -> Node {
         assert!(!expr.is_empty());
 
-        eprintln!("\n\nEXPR: {expr}");
-        eprintln!("BASE NODES: {base_nodes:?}");
-        eprintln!("THESE NODES: {these_nodes:?}");
-
         if expr.len() == 1 {
-            eprintln!(">>Bail 0");
             return base_nodes[&expr.first().unwrap()];
         } else if let Some(existing) = these_nodes.get(&expr) {
-            eprintln!(">>Bail 1");
             return *existing;
         } else if expr.len() == 2 {
             let mut node_data = constructor();
@@ -195,7 +164,6 @@ impl Dag {
             for el in expr.elements().iter() {
                 self.get_data_mut(base_nodes[el]).children.push(node);
             }
-            eprintln!(">>Bail 2");
             return node;
         }
 
@@ -241,7 +209,6 @@ impl Dag {
         };
 
         while let Some(best) = biggest_collection(&covered) {
-            eprintln!("    best: {best:?}");
             self.get_data_mut(these_nodes[best]).children.push(node);
             self.get_data_mut(node).add_link();
             for el in best.elements() {
@@ -304,10 +271,43 @@ impl NodeCreatorCollection for Formula {
     }
 }
 
+macro_rules! write_stat {
+    ($f:expr, $self:ident. $stat:ident) => {
+        write!($f, "{}: {}", stringify!($stat), $self.$stat)
+    };
+}
+
 #[derive(Default, Debug)]
-struct Stats {
+pub struct Stats {
+    literals: usize,
+    nodes: usize,
+    props: usize,
+    edges: usize,
     tally_max: usize,
+    fanout_max: usize,
     tally_total: usize,
+    fanout_total: usize,
+    nodes_with_fanout: usize,
+}
+impl Display for Stats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write_stat!(f, self.literals)?;
+        write_stat!(f, self.nodes)?;
+        write_stat!(f, self.props)?;
+        write_stat!(f, self.edges)?;
+        write_stat!(f, self.tally_max)?;
+        write_stat!(f, self.fanout_max)?;
+        write_stat!(f, self.tally_total)?;
+        write_stat!(f, self.fanout_total)?;
+        write_stat!(f, self.nodes_with_fanout)?;
+
+        let tally_avg = self.tally_total as f64 / self.nodes as f64;
+        let fanout_avg = self.fanout_total as f64 / self.nodes as f64;
+        write!(f, "tally_avg: {tally_avg:.2}")?;
+        write!(f, "fanout_avg: {fanout_avg:.2}")?;
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Default)]
@@ -328,9 +328,7 @@ impl LiteralMatcher {
         // individual nodes will actually end up existing either way, or alternatively on the
         // number of different sets those values appear in. this isn't a tradeoff with an
         // easy obvious answer.
-        eprintln!("Literal values: {self:?}, {node:?}, {values:?}");
         if values.is_empty() {
-            eprintln!("  WILDCARD");
             assert!(self.wildcard.is_none());
             self.wildcard = Some(node);
         }
@@ -343,14 +341,12 @@ impl LiteralMatcher {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Node(usize);
-
 impl Node {
-    fn and(dag: &mut Dag, specificity: Specificity) -> Self {
-        dag.new_node(NodeData::and(specificity))
-    }
-
-    fn or(dag: &mut Dag) -> Self {
-        dag.new_node(NodeData::or())
+    fn accumulate_stats(self, dag: &Dag, stats: &mut Stats, visited: &mut IndexSet<Node>) {
+        if !visited.contains(&self) {
+            visited.insert(self);
+            dag.get_data(self).accumulate_stats(dag, stats, visited);
+        }
     }
 }
 
@@ -411,8 +407,19 @@ impl NodeData {
         }
     }
 
-    fn accumulate_stats(&self, stats: &mut Stats, visited: &mut IndexSet<Node>) {
-        todo!()
+    fn accumulate_stats(&self, dag: &Dag, stats: &mut Stats, visited: &mut IndexSet<Node>) {
+        stats.nodes += 1;
+        stats.props += self.props.len();
+        stats.edges += self.children.len();
+        stats.fanout_max = stats.fanout_max.max(self.children.len());
+        stats.fanout_total += self.children.len();
+        self.accumulate_subclass_stats(stats);
+        if !self.children.is_empty() {
+            stats.nodes_with_fanout += 1;
+        }
+        for node in &self.children {
+            node.accumulate_stats(dag, stats, visited);
+        }
     }
 }
 
@@ -430,8 +437,9 @@ pub mod dot {
 
     pub type DiGraph = petgraph::graph::DiGraph<StyledNode, ()>;
 
+    #[allow(dead_code)]
     pub struct StyledNode {
-        id: Node,
+        id: Node, // Unique identity in the dag
         label: String,
         fillcolor: String,
         style: String,
@@ -618,7 +626,7 @@ pub mod dot {
 
     pub fn to_dot<'a>(graph: &'a DiGraph) -> Dot<'a, &'a DiGraph> {
         Dot::with_attr_getters(
-            &graph,
+            graph,
             &[Config::EdgeNoLabel, Config::NodeNoLabel],
             &|_, _| "".to_string(),
             &|_, (_, style)| style.to_dot(),
@@ -631,7 +639,13 @@ pub mod dot {
 }
 
 #[cfg(test)]
-mod tests {
+#[cfg(feature = "dot")]
+mod dot_tests {
+    use crate::{
+        ast::RuleTreeNode,
+        dag::{Dag, dot::to_dot_str},
+    };
+
     const MULTILEVEL_EXAMPLE: &str = r#"
         a, f b e, c {
             c d {
@@ -644,14 +658,8 @@ mod tests {
         a, c, b e f : baz = quux
     "#;
 
-    #[cfg(feature = "dot")]
     #[test]
     fn tree_to_dot_1() {
-        use crate::{
-            ast::RuleTreeNode,
-            dag::{Dag, dot::to_dot_str},
-        };
-
         let n = crate::ast::parse(MULTILEVEL_EXAMPLE).unwrap();
 
         let mut tree = RuleTreeNode::default();
@@ -662,14 +670,8 @@ mod tests {
         println!("{}", to_dot_str(&dag));
     }
 
-    #[cfg(feature = "dot")]
     #[test]
     fn tree_to_dot_2() {
-        use crate::{
-            ast::RuleTreeNode,
-            dag::{Dag, dot::to_dot_str},
-        };
-
         let n = crate::ast::parse(
             r#"
                 a b c d e (f, g, h, i, j) {

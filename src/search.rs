@@ -121,7 +121,6 @@ impl<Acc: Accumulator, Tracer: PropertyTracer> Context<Acc, Tracer> {
         while let Some(constraint) = keys.pop_front() {
             assert!(constraint.key.values.len() < 2);
             let value = constraint.key.values.first().cloned();
-            println!("Match: {:?} = {value:?}", constraint.key);
             state = state.match_step(&mut keys, &self.dag, &constraint.key.name, value.as_deref());
         }
         self.with_new_state(state)
@@ -135,13 +134,14 @@ impl<Acc: Accumulator, Tracer: PropertyTracer> Context<Acc, Tracer> {
     }
 }
 
-trait Accumulator: Default + Clone + std::fmt::Debug {
+pub trait Accumulator: Default + Clone + std::fmt::Debug {
     fn accum(self, prop: PropertyValue, specificity: Specificity) -> Self;
     fn values(&self) -> impl ExactSizeIterator<Item = &PropertyValue>;
 }
 
 // TODO really this should probably be a map from value to specificity, where only the highest specificity
 // for a given specific value/origin is retained
+#[allow(dead_code)] // Temporarily keeping this around, but don't really need it
 #[derive(Clone, Debug, Default)]
 struct SetAccumulator {
     values: PersistentSet<(PropertyValue, Specificity)>,
@@ -158,7 +158,7 @@ impl Accumulator for SetAccumulator {
 }
 
 #[derive(Clone, Debug)]
-struct MaxAccumulator {
+pub struct MaxAccumulator {
     specificity: Specificity,
     values: PersistentSet<PropertyValue>,
 }
@@ -229,14 +229,10 @@ impl<Acc: Accumulator> ContextState<Acc> {
     #[must_use]
     fn accum_tally(&self, g: &Dag, n: Node) -> (Self, bool) {
         let mut count = *self.tallies.get(&n).unwrap_or(&g.get_data(n).tally_count);
-        println!("    Checking tally: {n:?} ({:?}) = {count}", g.get_data(n));
         if count > 0 {
             count -= 1;
             let tallies = self.tallies.insert(n, count);
             let activated = count == 0;
-            if activated {
-                println!("    ACTIVATED");
-            }
             return (self.with_tallies(tallies), activated);
         }
         (self.clone(), false)
@@ -313,7 +309,6 @@ impl<Acc: Accumulator> ContextState<Acc> {
         n: Node,
         propagated_specificity: Option<Specificity>,
     ) -> Self {
-        println!("  ACTIVATE: {n:?} ({:?})", g.get_data(n));
         let activator = if matches!(g.get_data(n).op, NodeType::And(..)) {
             Self::activate_and
         } else {
@@ -419,7 +414,7 @@ impl<Acc: Accumulator> ContextState<Acc> {
     }
 }
 
-struct DisplayContext(PersistentQueue<Constraint>);
+pub struct DisplayContext(PersistentQueue<Constraint>);
 impl Display for DisplayContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "in context: [ {} ]", self.0.iter().joined_by(" > "))
