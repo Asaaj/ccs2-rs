@@ -1,8 +1,8 @@
-use std::{marker::PhantomData, ops::Deref};
+use std::{collections::VecDeque, fmt::Display};
 
 use crate::{
-    ast::{Constraint, Key, PersistentStr, PropDef, Property, PropertyValue, Specificity},
-    dag::{Node, NodeType},
+    ast::{self, Constraint, JoinedBy, Key, PersistentStr, Property, PropertyValue, Specificity},
+    dag::{self, Node, NodeType},
 };
 
 // TODO: Make thread-safety opt-in? These should be the only changes...
@@ -12,8 +12,132 @@ type PersistentSet<T> = rpds::HashTrieSetSync<T>;
 type PersistentMap<K, V> = rpds::HashTrieMapSync<K, V>;
 type Dag = std::sync::Arc<crate::dag::Dag>;
 
-trait Accumulator: Default + Clone {
+#[derive(thiserror::Error, Debug)]
+pub enum ContextError {
+    #[error("Failed to find property '{0}' {1}")]
+    MissingPropertyError(String, DisplayContext),
+    #[error("Property '{0}' has no values {1}")]
+    EmptyPropertyError(String, DisplayContext),
+    #[error("Found {0} properties matching '{1}' {2}")]
+    AmbiguousPropertyError(usize, String, DisplayContext),
+}
+
+type Result<T> = std::result::Result<T, ContextError>;
+
+pub struct Context<Acc: Accumulator, Tracer: PropertyTracer> {
+    dag: Dag,
+    tracer: Tracer,
+    state: ContextState<Acc>,
+}
+impl Context<MaxAccumulator, NullTracer> {
+    pub fn from_ccs(ccs: impl AsRef<str>) -> crate::CcsResult<Self> {
+        Self::from_ccs_with_tracer(ccs, NullTracer {})
+    }
+}
+impl<Acc: Accumulator, Tracer: PropertyTracer> Context<Acc, Tracer> {
+    pub fn from_ccs_with_tracer(ccs: impl AsRef<str>, tracer: Tracer) -> crate::CcsResult<Self> {
+        let rules = ast::parse(ccs)?;
+        let mut tree = ast::RuleTreeNode::default();
+        rules.add_to(&mut tree);
+        let dag = std::sync::Arc::new(dag::Dag::build(tree));
+
+        Ok(Self {
+            dag,
+            tracer,
+            state: Default::default(),
+        }
+        .augment_all([], true))
+    }
+
+    pub fn augment(&self, key: impl AsRef<str>) -> Self {
+        let key = Key::new_lit(key.as_ref(), []);
+        self.augment_all([key], false)
+    }
+
+    pub fn augment_value(&self, key: impl AsRef<str>, value: impl AsRef<str>) -> Self {
+        let key = Key::new_lit(key.as_ref(), [value.as_ref().into()]);
+        self.augment_all([key], false)
+    }
+
+    pub fn get_single_property(&self, prop: impl AsRef<str>) -> Result<PropertyValue> {
+        let prop = prop.as_ref().to_string();
+
+        let contenders = self.state.props.get(prop.as_str());
+        let mut properties = match contenders {
+            Some(contenders) => contenders.values(),
+            None => {
+                return Err(ContextError::MissingPropertyError(
+                    prop,
+                    self.state.display_context(),
+                ));
+            }
+        };
+        if properties.len() == 0 {
+            Err(ContextError::EmptyPropertyError(
+                prop,
+                self.state.display_context(),
+            ))
+        } else if properties.len() > 1 {
+            Err(ContextError::AmbiguousPropertyError(
+                properties.len(),
+                prop,
+                self.state.display_context(),
+            ))
+        } else {
+            let matching = properties.next().unwrap();
+            self.tracer
+                .trace(&prop, matching, self.state.display_context());
+            Ok(matching.clone())
+        }
+    }
+
+    pub fn get_single_value(&self, prop: impl AsRef<str>) -> Result<PersistentStr> {
+        Ok(self.get_single_property(prop)?.value.clone())
+    }
+
+    fn with_new_state(&self, state: ContextState<Acc>) -> Self {
+        Self {
+            dag: self.dag.clone(),
+            tracer: self.tracer.clone(),
+            state,
+        }
+    }
+
+    fn augment_all(
+        &self,
+        keys: impl IntoIterator<Item = Key>, // TODO: this causes an unnecessary Arc alloc
+        activate_root: bool,
+    ) -> Self {
+        let mut state = self.state.clone();
+
+        let mut keys = CurrentConstraints::from_iter(keys.into_iter().map(Into::into));
+        if activate_root {
+            let prop_node = self.dag.get_data(self.dag.prop_node);
+            let root_constraints = VecDeque::from_iter(prop_node.constraints.iter().cloned());
+            // TODO: This is messy and creates duplicate work
+            keys = root_constraints.into_iter().chain(keys).collect();
+            state = state.activate(&mut keys, &self.dag, self.dag.prop_node, None);
+        }
+        while let Some(constraint) = keys.pop_front() {
+            assert!(constraint.key.values.len() < 2);
+            let value = constraint.key.values.first().cloned();
+            println!("Match: {:?} = {value:?}", constraint.key);
+            state = state.match_step(&mut keys, &self.dag, &constraint.key.name, value.as_deref());
+        }
+        self.with_new_state(state)
+    }
+
+    #[cfg(feature = "dot")]
+    pub fn to_dot_str(&self) -> String {
+        use crate::dag::dot::*;
+        let digraph = dag_to_digraph(&self.dag, &self.state.tallies);
+        format!("{:?}", to_dot(&digraph))
+    }
+}
+
+trait Accumulator: Default + Clone + std::fmt::Debug {
     fn accum(self, prop: PropertyValue, specificity: Specificity) -> Self;
+    fn values(&self) -> impl ExactSizeIterator<Item = &PropertyValue>;
 }
 
 // TODO really this should probably be a map from value to specificity, where only the highest specificity
@@ -27,6 +151,9 @@ impl Accumulator for SetAccumulator {
         SetAccumulator {
             values: self.values.insert((prop, specificity)),
         }
+    }
+    fn values(&self) -> impl ExactSizeIterator<Item = &PropertyValue> {
+        self.values.iter().map(|(v, _)| v)
     }
 }
 
@@ -51,6 +178,9 @@ impl Accumulator for MaxAccumulator {
             self
         }
     }
+    fn values(&self) -> impl ExactSizeIterator<Item = &PropertyValue> {
+        self.values.iter()
+    }
 }
 impl Default for MaxAccumulator {
     fn default() -> Self {
@@ -61,24 +191,25 @@ impl Default for MaxAccumulator {
     }
 }
 
-pub trait PropertyTracer {
-    fn trace(&mut self); // TODO!
+pub trait PropertyTracer: Clone {
+    fn trace(&self, name: &str, value: &PropertyValue, context: DisplayContext);
 }
+#[derive(Clone)]
 pub struct NullTracer();
 impl PropertyTracer for NullTracer {
-    fn trace(&mut self) {}
+    fn trace(&self, _name: &str, _value: &PropertyValue, _context: DisplayContext) {}
 }
 
-type Tallies = PersistentMap<Node, usize>;
+pub type Tallies = PersistentMap<Node, usize>;
+type CurrentConstraints = VecDeque<Constraint>;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 struct ContextState<Acc: Accumulator> {
-    keys: PersistentQueue<Constraint>, // TODO: name is just for consistency with Python
     tallies: Tallies,
     or_specificities: PersistentMap<Node, Specificity>,
     props: PersistentMap<PersistentStr, Acc>,
     poisoned: PersistentSet<Node>,
-    debug_context: Option<String>, // TODO: Persistent
+    debug_context: PersistentQueue<Constraint>,
 }
 impl<Acc: Accumulator> ContextState<Acc> {
     fn insert_or_specificity(&self, n: Node, specificity: Specificity) -> Self {
@@ -87,51 +218,54 @@ impl<Acc: Accumulator> ContextState<Acc> {
         new_state
     }
 
-    fn append_constraint(&self, constraint: Constraint) -> Self {
-        let mut new_state = self.clone();
-        new_state.keys = new_state.keys.enqueue(constraint);
-        new_state
-    }
-
     // TODO: Replacement functions are very error-prone. Easy to forget to update the state
+    #[must_use]
     fn with_tallies(&self, tallies: Tallies) -> Self {
         let mut new_state = self.clone();
         new_state.tallies = tallies;
         new_state
     }
+
+    #[must_use]
     fn accum_tally(&self, g: &Dag, n: Node) -> (Self, bool) {
         let mut count = *self.tallies.get(&n).unwrap_or(&g.get_data(n).tally_count);
+        println!("    Checking tally: {n:?} ({:?}) = {count}", g.get_data(n));
         if count > 0 {
             count -= 1;
             let tallies = self.tallies.insert(n, count);
-            if count == 0 {
-                return (self.with_tallies(tallies), true);
+            let activated = count == 0;
+            if activated {
+                println!("    ACTIVATED");
             }
+            return (self.with_tallies(tallies), activated);
         }
         (self.clone(), false)
     }
 
+    #[must_use]
     fn activate_and(
-        &self,
+        mut self,
         g: &Dag,
         n: Node,
         _propagated_specificity: Option<Specificity>,
     ) -> (Self, Option<Specificity>) {
         let (state, zeroed) = self.accum_tally(g, n);
+        self = state;
         if zeroed {
             let n_data = g.get_data(n);
             if let NodeType::And(specificity) = n_data.op {
-                (state, Some(specificity))
+                (self, Some(specificity))
             } else {
                 panic!("Attempted activate_and with an OR node: {n:?}, {n_data:?}");
             }
         } else {
-            (state, None)
+            (self, None)
         }
     }
 
+    #[must_use]
     fn activate_or(
-        &self,
+        self,
         _g: &Dag,
         n: Node,
         propagated_specificity: Option<Specificity>,
@@ -147,56 +281,71 @@ impl<Acc: Accumulator> ContextState<Acc> {
                     Some(propagated_specificity),
                 )
             } else {
-                (self.clone(), None)
+                (self, None)
             }
         } else {
-            (self.clone(), Some(prev_spec))
+            (self, Some(prev_spec))
         }
     }
 
+    #[must_use]
     fn update_props(
-        &self,
+        mut self,
         new_props: impl IntoIterator<Item = Property>,
         activation_specificity: Specificity,
     ) -> Self {
-        let mut state = self.clone();
         for Property(name, prop_val) in new_props {
-            let prop_vals = state.props.get(&name).unwrap_or(&Acc::default()).clone();
+            let prop_vals = self.props.get(&name).unwrap_or(&Acc::default()).clone();
             let prop_specificity =
                 Specificity::new(prop_val.override_level, 0, 0, 0) + activation_specificity;
-            state.props = state
+            self.props = self
                 .props
                 .insert(name, prop_vals.accum(prop_val, prop_specificity));
         }
-        state
+        self
     }
 
-    fn activate(&self, g: &Dag, n: Node, propagated_specificity: Option<Specificity>) -> Self {
+    #[must_use]
+    fn activate(
+        mut self,
+        active_constraints: &mut CurrentConstraints,
+        g: &Dag,
+        n: Node,
+        propagated_specificity: Option<Specificity>,
+    ) -> Self {
+        println!("  ACTIVATE: {n:?} ({:?})", g.get_data(n));
         let activator = if matches!(g.get_data(n).op, NodeType::And(..)) {
             Self::activate_and
         } else {
             Self::activate_or
         };
-        let (mut state, activation_specificity) = activator(self, g, n, propagated_specificity);
+        let (new_state, activation_specificity) = activator(self, g, n, propagated_specificity);
+        self = new_state;
         if let Some(activation_specificity) = activation_specificity {
             let n_data = g.get_data(n);
             for constraint in &n_data.constraints {
-                state = state.append_constraint(constraint.clone());
+                active_constraints.push_back(constraint.clone());
             }
 
-            state = state.update_props(n_data.props.clone(), activation_specificity);
+            self = self.update_props(n_data.props.clone(), activation_specificity);
             for n in &n_data.children {
-                state = state.activate(g, *n, Some(activation_specificity))
+                self = Self::activate(
+                    self,
+                    active_constraints,
+                    g,
+                    *n,
+                    Some(activation_specificity),
+                )
             }
-            state
+            self
         } else {
-            self.clone()
+            self
         }
     }
 
-    fn poison(&self, g: &Dag, n: Node) -> Self {
+    #[must_use]
+    fn poison(mut self, g: &Dag, n: Node) -> Self {
         let mut fully_poisoned = false;
-        let mut state = self.clone();
         if matches!(g.get_data(n).op, NodeType::And(..)) {
             // a bit of care is required here, since we build tally-one
             // conjunction nodes for literals, even when they represent
@@ -214,93 +363,188 @@ impl<Acc: Accumulator> ContextState<Acc> {
                 fully_poisoned = true;
             }
         } else {
-            (state, fully_poisoned) = self.accum_tally(g, n);
+            (self, fully_poisoned) = self.accum_tally(g, n);
         }
 
         if fully_poisoned {
-            state.poisoned = state.poisoned.insert(n);
+            self.poisoned = self.poisoned.insert(n);
             for n in &g.get_data(n).children {
-                state = state.poison(g, *n);
+                self = self.poison(g, *n);
             }
         }
-        state
+        self
     }
 
-    fn match_step(&self, g: &Dag, key: &str, value: Option<&str>) -> Self {
-        let mut state = self.clone();
+    #[must_use]
+    fn match_step(
+        mut self,
+        active_constraints: &mut CurrentConstraints,
+        g: &Dag,
+        key: &str,
+        value: Option<&str>,
+    ) -> Self {
         if let Some(matcher) = g.children.get(key) {
             if let Some(wildcard) = matcher.wildcard {
-                state = state.activate(g, wildcard, None);
+                self = self.activate(active_constraints, g, wildcard, None);
             }
             if let Some(value) = value
                 && let Some(positive_values) = matcher.positive_values.get(value)
             {
                 for node in positive_values {
-                    state = state.activate(g, *node, None);
+                    self = self.activate(active_constraints, g, *node, None);
                 }
             }
             // TODO negative matches here too
-            if !state.poisoned.is_empty() {
+            if !self.poisoned.is_empty() {
                 for (v2, nodes) in &matcher.positive_values {
                     // TODO here, there's a question... if value is None, do
                     // we insist that no value ever be asserted for key and
                     // poison everything? or do we remain agnostic, with the
                     // idea that key.value is still a monotonic refinement of
                     // just key? for now we assume the former.
-                    if value != Some(&*v2) {
+                    if value != Some(v2) {
                         for node in nodes {
-                            state = state.poison(g, *node);
+                            self = self.poison(g, *node);
                         }
                     }
                 }
             }
         }
 
-        state
+        self
+    }
+
+    fn display_context(&self) -> DisplayContext {
+        DisplayContext(self.debug_context.clone())
     }
 }
 
-pub struct Context<Acc: Accumulator, Tracer: PropertyTracer> {
-    dag: Dag,
-    tracer: Tracer,
-    state: ContextState<Acc>,
+struct DisplayContext(PersistentQueue<Constraint>);
+impl Display for DisplayContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "in context: [ {} ]", self.0.iter().joined_by(" > "))
+    }
 }
-impl<Acc: Accumulator, Tracer: PropertyTracer> Context<Acc, Tracer> {
-    pub fn with_tracer(dag: Dag, tracer: Tracer) -> Self {
-        Self {
-            dag,
-            tracer,
-            state: Default::default(),
-        }
+impl std::fmt::Debug for DisplayContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Context[{}]", self.0.iter().joined_by(", "))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_single_value() {
+        let ctx = Context::from_ccs(
+            r#"
+                a = 1
+                a = 2
+
+                c = 4.3
+                d = "cannotcast"
+            "#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            ctx.get_single_value("a"),
+            Err(ContextError::AmbiguousPropertyError(2, ..))
+        ));
+
+        assert!(matches!(
+            ctx.get_single_value("b"),
+            Err(ContextError::MissingPropertyError(..))
+        ));
+
+        assert_eq!(&*ctx.get_single_value("c").unwrap(), "4.3");
     }
 
-    fn new(dag: Dag, state: ContextState<Acc>, tracer: Tracer) -> Self {
-        Self { dag, tracer, state }
-    }
+    #[test]
+    fn with_root_node() {
+        let context = Context::from_ccs(
+            r#"
+                a, f b e, c {
+                    c d {
+                        x = y
+                    }
+                    e f {
+                        foobar = abc
+                    }
+                }
+                a, c, b e f : baz = quux
 
-    fn augment_all(
-        &self,
-        keys: impl IntoIterator<Item = Key>,
-        activate_root: bool,
-    ) -> ContextState<Acc> {
-        let mut state = self.state.clone();
-        if activate_root {
-            let prop_node = self.dag.get_data(self.dag.prop_node);
-            // TODO: Would probably be nicer to use a List, especially for this case
-            state.keys = PersistentQueue::from_iter(
-                prop_node
-                    .constraints
-                    .iter()
-                    .cloned()
-                    .chain(state.keys.iter().cloned()),
-            );
-            state = state.activate(&self.dag, self.dag.prop_node, None);
-        }
-        for key in keys.into_iter() {
-            assert!(key.values.len() < 2);
-            let value = key.values.first().cloned();
-            state = state.match_step(&self.dag, &*key.name, value.as_deref());
-        }
-        state
+                x = outerx
+                baz = outerbaz
+                foobar = outerfoobar
+                noothers = val
+                
+                multi {
+                    x = failure
+                    level {
+                        x = success
+                    }
+                }
+
+                z.underconstraint {
+                    c = success
+                }
+                @constrain z.underconstraint
+                c = failure
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(&*context.get_single_value("baz").unwrap(), "outerbaz");
+
+        let in_a = context.augment("a");
+        assert_eq!(&*in_a.get_single_value("baz").unwrap(), "quux");
+        assert_eq!(&*context.get_single_value("x").unwrap(), "outerx");
+
+        let in_c = context.augment("c");
+        assert_eq!(&*in_c.get_single_value("x").unwrap(), "outerx");
+
+        let in_cd = in_c.augment("d");
+        assert_eq!(&*in_cd.get_single_value("x").unwrap(), "y");
+
+        assert_eq!(&*in_cd.get_single_value("noothers").unwrap(), "val");
+
+        assert_eq!(&*context.get_single_value("c").unwrap(), "success");
+
+        let lvl1 = context.augment("multi");
+        let lvl2 = lvl1.augment("level");
+
+        assert_eq!(&*lvl2.get_single_value("x").unwrap(), "success");
+    }
+}
+
+#[cfg(all(test, feature = "dot"))]
+mod dot_examples {
+    use super::*;
+    use crate::ast::macros::*;
+
+    #[test]
+    fn activations_to_dot_1() {
+        let ccs = r#"
+                a b c {
+                    x = 1
+                }
+                a b {
+                    y = 2
+                }
+                b c (e, f, g) {
+                    z = 3
+                }
+                b d (e, f) {
+                    w = 4
+                }
+                b {
+                    s = 5
+                }
+            "#;
+        let context = Context::from_ccs(ccs).unwrap();
+        let context = context.augment_all([key!("b"), key!("d")], false);
+        println!("{}", context.to_dot_str());
     }
 }

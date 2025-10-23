@@ -42,6 +42,6 @@ impl From<PropDef> for Property {
 }
 impl Display for Property {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.1.value)
+        write!(f, "{} = {}", self.0, self.1.value)
     }
 }

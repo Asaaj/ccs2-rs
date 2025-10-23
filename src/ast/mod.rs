@@ -21,9 +21,12 @@ pub type PersistentStr = std::sync::Arc<str>;
 
 pub use dnf::to_dnf;
 pub use formula::{Clause, Formula};
-pub use parser::parse;
 pub use property::{Property, PropertyValue};
 pub use rule_tree::RuleTreeNode;
+
+pub fn parse(file_contents: impl AsRef<str>) -> AstResult<Nested> {
+    parser::parse(file_contents).map_err(Into::into)
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum AstError {
@@ -86,19 +89,35 @@ pub struct Key {
     pub specificity: Specificity,
 }
 impl Key {
+    pub fn new_lit(name: impl ToString, values: impl IntoIterator<Item = PersistentStr>) -> Self {
+        Self::create(name, values, Specificity::positive_lit())
+    }
+
     pub fn new(name: impl ToString, values: impl IntoIterator<Item = PersistentStr>) -> Self {
+        // TODO: This is really error-prone. Require specificity from everyone?
+        let values: Vec<_> = values.into_iter().collect();
+        let specificity = if !values.is_empty() {
+            Specificity::positive_lit()
+        } else {
+            Specificity::wildcard()
+        };
+        Self::create(name, values, specificity)
+    }
+
+    fn create(
+        name: impl ToString,
+        values: impl IntoIterator<Item = PersistentStr>,
+        specificity: Specificity,
+    ) -> Self {
         let mut values: Vec<_> = values.into_iter().collect();
         values.sort_unstable(); // Important: values are always sorted!
         Self {
             name: name.to_string().into(),
-            specificity: if !values.is_empty() {
-                Specificity::positive_lit()
-            } else {
-                Specificity::wildcard()
-            },
-            values: values.into_iter().map(Into::into).collect(),
+            specificity,
+            values: values.into_iter().collect(),
         }
     }
+
     /// Key-value parsing shouldn't be done here, really. It's done by the actual parser
     /// implementation. However, this is handy for expressivity in tests, so we'll just allow it for
     /// that.
@@ -361,6 +380,11 @@ pub struct Constraint {
 impl From<Key> for Constraint {
     fn from(key: Key) -> Self {
         Self { key }
+    }
+}
+impl Display for Constraint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.key.fmt(f)
     }
 }
 

@@ -6,7 +6,7 @@ use std::{
 use indexmap::{IndexMap, IndexSet};
 
 use crate::ast::{
-    Clause, Constraint, Formula, JoinedBy, Key, Op, PersistentStr, PropDef, Property, RuleTreeNode,
+    Clause, Constraint, Formula, JoinedBy, Key, Op, PersistentStr, Property, RuleTreeNode,
     Specificity,
 };
 
@@ -420,7 +420,7 @@ impl NodeData {
 pub mod dot {
     use std::{fmt::Display, ops::AddAssign};
 
-    use crate::ast::JoinedBy;
+    use crate::{ast::JoinedBy, search};
 
     use super::*;
     use petgraph::{
@@ -515,94 +515,104 @@ pub mod dot {
         }
     }
 
-    impl From<&Dag> for DiGraph {
-        fn from(dag: &Dag) -> Self {
-            let mut g = Self::new();
-            let t = IndexMap::default(); // TODO:
+    pub fn dag_to_digraph(dag: &Dag, tallies: &search::Tallies) -> DiGraph {
+        let mut g = DiGraph::new();
 
-            let mut node_mapping = IndexMap::default();
-            fn add_nodes(
-                dag: &Dag,
-                g: &mut DiGraph,
-                node_mapping: &mut IndexMap<Node, NodeIndex>,
-                t: &IndexMap<Node, usize>,
-                p: NodeIndex,
-                nodes: &[Node],
-            ) {
-                // TODO: active_only?
-                for n in nodes {
-                    let n_data = dag.get_data(*n);
-                    let (mut label, color) = if matches!(n_data.op, NodeType::Or) {
-                        let label = "V".to_string();
-                        if t.contains_key(n) {
-                            (label, "palegreen")
-                        } else {
-                            (label, "lightblue")
-                        }
+        let mut node_mapping = IndexMap::default();
+        fn add_nodes(
+            dag: &Dag,
+            g: &mut DiGraph,
+            node_mapping: &mut IndexMap<Node, NodeIndex>,
+            t: &search::Tallies,
+            p: NodeIndex,
+            nodes: &[Node],
+        ) {
+            // TODO: active_only?
+            for n in nodes {
+                let n_data = dag.get_data(*n);
+                let (mut label, color) = if matches!(n_data.op, NodeType::Or) {
+                    let label = "V".to_string();
+                    if t.contains_key(n) {
+                        (label, "palegreen")
                     } else {
-                        let count = *t.get(n).unwrap_or(&n_data.tally_count);
-                        let mut label = format!("{}", n_data.tally_count);
-                        let color = if count == 0 {
-                            "palegreen"
-                        } else if count != n_data.tally_count {
-                            label = format!("{} / {}", n_data.tally_count - count, label);
-                            "mistyrose"
-                        } else {
-                            "pink2"
-                        };
-                        (label, color)
-                    };
-                    let mut style = "filled".to_string();
-                    if !n_data.props.is_empty() {
-                        label += &format!(" [{}]", n_data.props.iter().joined_by(","));
-                        style += ", bold";
+                        (label, "lightblue")
                     }
-                    let node_id = if let Some(existing) = node_mapping.get(n) {
-                        *existing
+                } else {
+                    let count = *t.get(n).unwrap_or(&n_data.tally_count);
+                    let mut label = format!("{}", n_data.tally_count);
+                    let color = if count == 0 {
+                        "palegreen"
+                    } else if count != n_data.tally_count {
+                        label = format!("{} / {}", n_data.tally_count - count, label);
+                        "mistyrose"
                     } else {
-                        let node_id = g.add_node(StyledNode::styled(*n, label, color, style, ""));
-                        node_mapping.insert(*n, node_id);
-                        node_id
+                        "pink2"
                     };
-
-                    if !g.contains_edge(p, node_id) {
-                        g.add_edge(p, node_id, ());
-                    }
-                    add_nodes(dag, g, node_mapping, t, node_id, &n_data.children);
+                    (label, color)
+                };
+                let mut style = "filled".to_string();
+                if !n_data.props.is_empty() {
+                    label += &format!(" [{}]", n_data.props.iter().joined_by(","));
+                    style += ", bold";
                 }
+                let node_id = if let Some(existing) = node_mapping.get(n) {
+                    *existing
+                } else {
+                    let node_id = g.add_node(StyledNode::styled(*n, label, color, style, ""));
+                    node_mapping.insert(*n, node_id);
+                    node_id
+                };
+
+                if !g.contains_edge(p, node_id) {
+                    g.add_edge(p, node_id, ());
+                }
+                add_nodes(dag, g, node_mapping, t, node_id, &n_data.children);
             }
+        }
 
-            // These aren't real nodes in the Dag, but we want to draw them anyway
-            let mut lit_id = 1000000;
+        // These aren't real nodes in the Dag, but we want to draw them anyway
+        let mut lit_id = 1000000;
 
-            for (l, matcher) in &dag.children {
+        for (l, matcher) in &dag.children {
+            let lit_node = Node(lit_id);
+            lit_id += 1;
+            let node_id = g.add_node(StyledNode::new(lit_node, l));
+            node_mapping.insert(lit_node, node_id);
+            if let Some(wildcard) = matcher.wildcard {
+                add_nodes(
+                    dag,
+                    &mut g,
+                    &mut node_mapping,
+                    tallies,
+                    node_id,
+                    &[wildcard],
+                );
+            }
+            for (v, nodes) in &matcher.positive_values {
                 let lit_node = Node(lit_id);
                 lit_id += 1;
-                let node_id = g.add_node(StyledNode::new(lit_node, l));
-                node_mapping.insert(lit_node, node_id);
-                if let Some(wildcard) = matcher.wildcard {
-                    add_nodes(dag, &mut g, &mut node_mapping, &t, node_id, &[wildcard]);
-                }
-                for (v, nodes) in &matcher.positive_values {
-                    let lit_node = Node(lit_id);
-                    lit_id += 1;
-                    let node_id_2 = g.add_node(StyledNode::styled(
-                        lit_node,
-                        v,
-                        "lightyellow",
-                        "filled",
-                        "box",
-                    ));
-                    node_mapping.insert(lit_node, node_id_2);
+                let node_id_2 = g.add_node(StyledNode::styled(
+                    lit_node,
+                    v,
+                    "lightyellow",
+                    "filled",
+                    "box",
+                ));
+                node_mapping.insert(lit_node, node_id_2);
 
-                    if !g.contains_edge(node_id, node_id_2) {
-                        g.add_edge(node_id, node_id_2, ());
-                    }
-                    add_nodes(dag, &mut g, &mut node_mapping, &t, node_id_2, nodes);
+                if !g.contains_edge(node_id, node_id_2) {
+                    g.add_edge(node_id, node_id_2, ());
                 }
+                add_nodes(dag, &mut g, &mut node_mapping, tallies, node_id_2, nodes);
             }
+        }
 
-            g
+        g
+    }
+
+    impl From<&Dag> for DiGraph {
+        fn from(value: &Dag) -> Self {
+            dag_to_digraph(value, &Default::default())
         }
     }
 
@@ -636,7 +646,7 @@ mod tests {
 
     #[cfg(feature = "dot")]
     #[test]
-    fn tree_to_dot() {
+    fn tree_to_dot_1() {
         use crate::{
             ast::RuleTreeNode,
             dag::{Dag, dot::to_dot_str},
