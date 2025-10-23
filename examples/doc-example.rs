@@ -24,11 +24,11 @@ fn main() -> Result<(), CcsError> {
 
     let context = Context::logging(ccs_str, log::Level::Info)?;
 
-    let augmented = context.augment("a").augment("c").augment("d");
-    assert_eq!(&augmented.get_property("x")?.to_type::<String>()?, "y");
-    assert!(augmented.get_property("foobar").is_err());
+    let augmented = context.constrain("a").constrain("c").constrain("d");
+    assert_eq!(&augmented.get("x")?.to_type::<String>()?, "y");
+    assert!(augmented.get("foobar").is_err());
 
     // Original context is untouched:
-    assert_eq!(context.get_property("x")?.to_type::<i32>()?, 42);
+    assert_eq!(context.get("x")?.to_type::<i32>()?, 42);
     Ok::<(), ccs2::CcsError>(())
 }

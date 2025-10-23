@@ -25,9 +25,7 @@ pub type ConversionResult<T> = Result<T, ConversionFailed>;
 /// use ccs2::{CommaSeparatedList, ToType};
 /// let context = ccs2::Context::new("items = '1, 2, 3, 4'", ccs2::NullTracer {}).unwrap();
 ///
-/// let items = context
-///     .get_property("items")?
-///     .to_type::<CommaSeparatedList>()?;
+/// let items = context.get("items")?.to_type::<CommaSeparatedList>()?;
 ///
 /// assert_eq!(items.0, vec!["1", "2", "3", "4"]);
 /// # Ok::<(), ccs2::ContextError>(())
@@ -146,4 +144,129 @@ impl<T: TypedProperty, E> OrConversionFailed<T> for std::result::Result<T, E> {
 
 fn simple_type_name<T>() -> Option<&'static str> {
     std::any::type_name::<T>().split("::").last()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CcsResult, Context};
+    use assert_approx_eq::assert_approx_eq;
+    use std::time::Duration;
+
+    #[test]
+    fn get_duration() -> CcsResult<()> {
+        let contents = r#"
+        duration1 = '5ms'
+        duration2 = '3h'
+        constrained { duration2 = '1d5h' }
+        "#;
+        let context = Context::without_tracing(contents)?;
+
+        assert_eq!(
+            context.get("duration1")?.to_type::<Duration>()?,
+            Duration::from_millis(5)
+        );
+        assert_eq!(
+            context.get("duration2")?.to_type::<Duration>()?,
+            Duration::from_hours(3)
+        );
+
+        let context = context.constrain("constrained");
+        assert_eq!(
+            context.get("duration2")?.to_type::<Duration>()?,
+            Duration::from_hours(29)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn get_comma_separated_list() -> CcsResult<()> {
+        let contents = r#"
+        oneLineList = "first, second   ,third"
+        multiLineList = "
+            this,
+            that,
+            the other,
+        " // Extra comma will make an empty element
+        "#;
+        let context = Context::without_tracing(contents)?;
+
+        assert_eq!(
+            context
+                .get("oneLineList")?
+                .to_type::<CommaSeparatedList>()?
+                .0,
+            ["first", "second", "third"]
+        );
+
+        assert_eq!(
+            context
+                .get("multiLineList")?
+                .to_type::<CommaSeparatedList>()?
+                .0,
+            ["this", "that", "the other", ""]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn get_arithmetic_types() -> CcsResult<()> {
+        let contents = r#"
+        boolVal = false
+        intVal = 123
+        floatVal = 123.4
+        "#;
+        let context = Context::without_tracing(contents)?;
+
+        let bool_val = context.get("boolVal")?;
+        let int_val = context.get("intVal")?;
+        let float_val = context.get("floatVal")?;
+
+        assert!(!(bool_val.to_type::<bool>()?));
+
+        assert_eq!(int_val.to_type::<u32>()?, 123u32);
+        assert_eq!(int_val.to_type::<i64>()?, 123i64);
+
+        assert_approx_eq!(float_val.to_type::<f32>()?, 123.4f32);
+        assert_approx_eq!(float_val.to_type::<f64>()?, 123.4f64);
+
+        Ok(())
+    }
+
+    #[test]
+    fn realistic_constraints() -> CcsResult<()> {
+        let contents = r#"
+            env.prod module.logger {
+                level = INFO
+            }
+            env.dev module.logger {
+                level = DEBUG
+            }
+            env.dev module.debug {
+                format = "example format"
+            }
+        "#;
+        let context = Context::without_tracing(contents)?;
+
+        let prod_logger = context
+            .constrain(("env", "prod"))
+            .constrain(("module", "logger"));
+        let dev_logger = context
+            .constrain(("env", "dev"))
+            .constrain(("module", "logger"));
+
+        assert_eq!(&*prod_logger.get_value("level")?, "INFO");
+        assert_eq!(&*dev_logger.get_value("level")?, "DEBUG");
+
+        let dev_debug_module = context
+            .constrain(("env", "dev"))
+            .constrain(("module", "debug"));
+
+        assert_eq!(&*dev_debug_module.get_value("format")?, "example format");
+        assert!(dev_debug_module.get_value("level").is_err());
+
+        Ok(())
+    }
 }

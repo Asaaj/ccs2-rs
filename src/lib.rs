@@ -21,12 +21,12 @@
 //!
 //! let context = Context::logging(ccs_str, log::Level::Info)?;
 //!
-//! let augmented = context.augment("a").augment("c").augment("d");
-//! assert_eq!(&augmented.get_property("x")?.to_type::<String>()?, "y");
-//! assert!(augmented.get_property("foobar").is_err());
+//! let constrained = context.constrain("a").constrain("c").constrain("d");
+//! assert_eq!(&constrained.get("x")?.to_type::<String>()?, "y");
+//! assert!(constrained.get("foobar").is_err());
 //!
 //! // Original context is untouched:
-//! assert_eq!(context.get_property("x")?.to_type::<i32>()?, 42);
+//! assert_eq!(context.get("x")?.to_type::<i32>()?, 42);
 //! # Ok::<(), ccs2::CcsError>(())
 //! ```
 //!
@@ -127,6 +127,13 @@ impl Context<LogTracer> {
     }
 }
 
+impl Context<NullTracer> {
+    /// Creates a context that does not trace when or where properties are found
+    pub fn without_tracing(ccs: impl AsRef<str>) -> Result<Self, AstError> {
+        Self::new(ccs, NullTracer {})
+    }
+}
+
 impl<Tracer: PropertyTracer> Context<Tracer> {
     /// Creates a context with the provided tracer
     ///
@@ -144,13 +151,13 @@ impl<Tracer: PropertyTracer> Context<Tracer> {
     /// ```text
     /// module : x = y
     /// ```
-    /// the property `x` can be retrieved through augmenting with `"module"`:
+    /// the property `x` can be retrieved through constraining with `"module"`:
     ///
     /// ```
     /// # let context = ccs2::Context::new("module : x = y", ccs2::NullTracer{}).unwrap();
     /// assert!(context.get_value("x").is_err());
     ///
-    /// let x: &str = &context.augment("module").get_value("x")?;
+    /// let x: &str = &context.constrain("module").get_value("x")?;
     /// assert_eq!(x, "y");
     /// # Ok::<(), ccs2::SearchError>(())
     /// ```
@@ -160,28 +167,28 @@ impl<Tracer: PropertyTracer> Context<Tracer> {
     /// ```text
     /// env.prod : x = y
     /// ```
-    /// the property `x` can be retrieved through augmenting with `("env", "prod")`:
+    /// the property `x` can be retrieved through constraining with `("env", "prod")`:
     ///
     /// ```
     /// # let context = ccs2::Context::new("env.prod : x = y", ccs2::NullTracer{}).unwrap();
-    /// assert!(context.augment("env").get_value("x").is_err());
+    /// assert!(context.constrain("env").get_value("x").is_err());
     ///
-    /// let x: &str = &context.augment(("env", "prod")).get_value("x")?;
+    /// let x: &str = &context.constrain(("env", "prod")).get_value("x")?;
     /// assert_eq!(x, "y");
     /// # Ok::<(), ccs2::SearchError>(())
     /// ```
-    pub fn augment(&self, constraint: impl AsKey) -> Self {
+    pub fn constrain(&self, constraint: impl AsKey) -> Self {
         Self {
             context: self.context.augment(constraint),
         }
     }
 
     /// Retrieves the value of a property from the current context, if possible
-    pub fn get_property(&self, prop: impl AsRef<str>) -> SearchResult<PropertyValue> {
+    pub fn get(&self, prop: impl AsRef<str>) -> SearchResult<PropertyValue> {
         self.context.get_single_property(prop)
     }
 
-    /// Helper function for [`Context::get_property`] to get [`PropertyValue::value`]
+    /// Helper function for [`Context::get`] to get [`PropertyValue::value`]
     pub fn get_value(&self, prop: impl AsRef<str>) -> SearchResult<PersistentStr> {
         self.context.get_single_value(prop)
     }
@@ -200,7 +207,7 @@ impl<Tracer: PropertyTracer> Context<Tracer> {
     ///
     /// Requires the `dot` feature
     #[cfg(feature = "dot")]
-    pub fn to_dag_as_dot_str(&self) -> String {
+    pub fn dag_as_dot_str(&self) -> String {
         self.context.dag_to_dot_str()
     }
 }
