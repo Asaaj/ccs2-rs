@@ -22,7 +22,7 @@
 //! let context = Context::logging(ccs_str, log::Level::Info)?;
 //!
 //! let constrained = context.constrain("a").constrain("c").constrain("d");
-//! assert_eq!(&constrained.get("x")?.to_type::<String>()?, "y");
+//! assert_eq!(&constrained.get_type::<String>("x")?, "y");
 //! assert!(constrained.get("foobar").is_err());
 //!
 //! // Original context is untouched:
@@ -108,6 +108,8 @@ pub enum CcsError {
     SearchError(#[from] SearchError),
     #[error(transparent)]
     ConversionError(#[from] ConversionFailed),
+    #[error(transparent)]
+    ContextError(#[from] ContextError),
 }
 pub type CcsResult<T> = Result<T, CcsError>;
 
@@ -191,6 +193,13 @@ impl<Tracer: PropertyTracer> Context<Tracer> {
     /// Helper function for [`Context::get`] to get [`PropertyValue::value`]
     pub fn get_value(&self, prop: impl AsRef<str>) -> SearchResult<PersistentStr> {
         self.context.get_single_value(prop)
+    }
+
+    /// Helper for the ever-common "get and convert" pattern
+    ///
+    /// `context.get_type::<T>(prop)` is basically equivalent to `context.get(prop)?.to_type::<T>()`
+    pub fn get_type<T: TypedProperty>(&self, prop: impl AsRef<str>) -> ContextResult<T> {
+        Ok(self.get(prop)?.to_type::<T>()?)
     }
 
     /// Retrieves the current context's queue of applied constraints, in the order they were applied

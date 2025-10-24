@@ -25,7 +25,7 @@ pub type ConversionResult<T> = Result<T, ConversionFailed>;
 /// use ccs2::{CommaSeparatedList, ToType};
 /// let context = ccs2::Context::new("items = '1, 2, 3, 4'", ccs2::NullTracer {}).unwrap();
 ///
-/// let items = context.get("items")?.to_type::<CommaSeparatedList>()?;
+/// let items = context.get_type::<CommaSeparatedList>("items")?;
 ///
 /// assert_eq!(items.0, vec!["1", "2", "3", "4"]);
 /// # Ok::<(), ccs2::ContextError>(())
