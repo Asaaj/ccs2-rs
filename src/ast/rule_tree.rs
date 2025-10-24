@@ -125,7 +125,7 @@ pub struct Stats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{macros::*, parse};
+    use crate::ast::{NullResolver, macros::*, parse};
     use pretty_assertions::assert_eq;
 
     fn formula(selector: Selector) -> Formula {
@@ -159,7 +159,7 @@ mod tests {
             }
             a, c, b e f : baz = quux
         "#;
-        let n = parse(ccs).unwrap();
+        let n = parse(ccs, &NullResolver()).unwrap();
         let mut tree = RuleTreeNode::default();
         n.add_to(&mut tree);
 

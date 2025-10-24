@@ -23,7 +23,7 @@ pub type ConversionResult<T> = Result<T, ConversionFailed>;
 ///
 /// ```
 /// use ccs2::{CommaSeparatedList, ToType};
-/// let context = ccs2::Context::new("items = '1, 2, 3, 4'", ccs2::NullTracer {}).unwrap();
+/// let context = ccs2::Context::from_str_without_tracing("items = '1, 2, 3, 4'").unwrap();
 ///
 /// let items = context.get_type::<CommaSeparatedList>("items")?;
 ///
@@ -160,7 +160,7 @@ mod tests {
         duration2 = '3h'
         constrained { duration2 = '1d5h' }
         "#;
-        let context = Context::without_tracing(contents)?;
+        let context = Context::from_str_without_tracing(contents)?;
 
         assert_eq!(
             context.get("duration1")?.to_type::<Duration>()?,
@@ -190,7 +190,7 @@ mod tests {
             the other,
         " // Extra comma will make an empty element
         "#;
-        let context = Context::without_tracing(contents)?;
+        let context = Context::from_str_without_tracing(contents)?;
 
         assert_eq!(
             context
@@ -218,7 +218,7 @@ mod tests {
         intVal = 123
         floatVal = 123.4
         "#;
-        let context = Context::without_tracing(contents)?;
+        let context = Context::from_str_without_tracing(contents)?;
 
         let bool_val = context.get("boolVal")?;
         let int_val = context.get("intVal")?;
@@ -248,7 +248,7 @@ mod tests {
                 format = "example format"
             }
         "#;
-        let context = Context::without_tracing(contents)?;
+        let context = Context::from_str_without_tracing(contents)?;
 
         let prod_logger = context
             .constrain(("env", "prod"))

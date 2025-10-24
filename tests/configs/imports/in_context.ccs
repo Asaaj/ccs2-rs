@@ -1,0 +1,2 @@
+// Imported within a context to show imports work as expected
+x = success

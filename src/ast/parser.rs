@@ -1,7 +1,10 @@
-use crate::ast::{AstNode, Key, Nested, Origin, PropDef, Selector};
+use crate::{
+    AstResult,
+    ast::{AstNode, ImportResolver, Key, Nested, Origin, PropDef, Selector},
+};
 use pest::{Parser, Span, iterators::Pair};
 use pest_derive::Parser;
-use std::backtrace::Backtrace;
+use std::{backtrace::Backtrace, path::PathBuf};
 
 #[derive(Parser)]
 #[grammar = "ast/ccs2.pest"]
@@ -26,13 +29,20 @@ pub enum ParseError {
 }
 pub type ParseResult<T> = Result<T, ParseError>;
 
-pub fn parse(file_contents: impl AsRef<str>) -> ParseResult<Nested> {
-    let mut file = Ccs2Parser::parse(Rule::file, file_contents.as_ref()).map_err(Box::new)?;
+pub fn parse(
+    file_contents: impl AsRef<str>,
+    resolver: &impl ImportResolver,
+    in_progress: &mut Vec<PathBuf>,
+) -> AstResult<Nested> {
+    let mut file = Ccs2Parser::parse(Rule::file, file_contents.as_ref())
+        .map_err(|e| ParseError::SyntaxError(Box::new(e)))?;
 
     let contents: Pair<Rule> = file.next().unwrap();
-    let nested = contents.try_into()?;
+    let mut nested: Nested = contents.try_into()?;
 
     assert_eq!(file.next().map(|p| p.as_rule()), Some(Rule::EOI));
+
+    nested.resolve_imports_internal(resolver, in_progress)?;
 
     Ok(nested)
 }
@@ -384,9 +394,12 @@ fn unsupported(rule: Rule) -> ParseError {
 
 #[cfg(test)]
 mod tests {
-    use crate::ast::{flatten, macros::*};
+    use crate::{
+        AstError, AstResult,
+        ast::{NullResolver, flatten, macros::*, parser::ParseError},
+    };
 
-    use super::{ParseResult, parse};
+    use super::parse;
     use anyhow::Result;
 
     macro_rules! __test_suite {
@@ -513,12 +526,12 @@ mod tests {
     }
 
     fn test_impl(to_parse: &str, should_succeed: bool) -> Result<()> {
-        let res = parse(to_parse);
+        let res = parse(to_parse, &NullResolver(), &mut vec![]);
         if should_succeed {
             assert!(res.is_ok(), "Expected success, got error: {res:?}");
         } else {
             assert!(
-                matches!(res, Err(super::ParseError::SyntaxError(..))),
+                matches!(res, Err(AstError::ParseError(ParseError::SyntaxError(..)))),
                 "Expected syntax error, got {res:?}"
             );
         }
@@ -526,13 +539,13 @@ mod tests {
     }
 
     #[test]
-    fn test_selector_operator_precedence() -> ParseResult<()> {
+    fn test_selector_operator_precedence() -> AstResult<()> {
         let example = r#"
         a.b a.c, b.c b.d b.e {
             prop1 = val1
         }
         "#;
-        let parsed = parse(example)?;
+        let parsed = parse(example, &NullResolver(), &mut vec![])?;
 
         assert_eq!(parsed.rules.len(), 1);
         let rule = parsed.rules.into_iter().next().unwrap();

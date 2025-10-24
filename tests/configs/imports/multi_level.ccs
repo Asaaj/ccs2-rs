@@ -1,0 +1,3 @@
+outermost.level {
+  @import 'single_level.ccs'
+}

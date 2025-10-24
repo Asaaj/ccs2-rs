@@ -1,0 +1,6 @@
+multi {
+  x = failure
+  level {
+    @import 'in_context.ccs'
+  }
+}

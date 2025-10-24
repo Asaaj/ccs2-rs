@@ -4,7 +4,6 @@ use std::{
     hash::Hash,
     ops::Add,
     path::{Path, PathBuf},
-    rc::Rc,
 };
 
 use indexmap::{IndexMap, IndexSet};
@@ -25,8 +24,8 @@ pub use formula::{Clause, Formula};
 pub use property::{Property, PropertyValue};
 pub use rule_tree::RuleTreeNode;
 
-pub fn parse(file_contents: impl AsRef<str>) -> AstResult<Nested> {
-    parser::parse(file_contents).map_err(Into::into)
+pub fn parse(file_contents: impl AsRef<str>, resolver: &impl ImportResolver) -> AstResult<Nested> {
+    parser::parse(file_contents, resolver, &mut vec![])
 }
 
 /// A common error type for all of the things that can go wrong while parsing and building the AST
@@ -239,6 +238,14 @@ pub trait ImportResolver {
     fn resolve(&self, location: &Path) -> AstResult<String>;
 }
 
+/// Only used for testing, shouldn't be made public
+pub(crate) struct NullResolver();
+impl ImportResolver for NullResolver {
+    fn resolve(&self, _: &std::path::Path) -> crate::AstResult<String> {
+        Ok("".to_string())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Expr {
     pub op: Op,
@@ -315,9 +322,9 @@ impl AstNode {
         }
     }
 
-    pub fn resolve_imports(
+    pub fn resolve_imports<R: ImportResolver>(
         &mut self,
-        resolver: Rc<dyn ImportResolver>,
+        resolver: &R,
         in_progress: &mut Vec<PathBuf>,
     ) -> AstResult<()> {
         use AstNode::*;
@@ -327,17 +334,14 @@ impl AstNode {
                     Err(AstError::CircularImport(import.location.clone()))
                 } else {
                     in_progress.push(import.location.clone());
-                    let nested = parser::parse(resolver.resolve(&import.location)?)?;
+                    let nested =
+                        parser::parse(resolver.resolve(&import.location)?, resolver, in_progress)?;
+
                     import.ast = Some(Box::new(AstNode::Nested(nested)));
                     Ok(())
                 }
             }
-            Nested(nested) => {
-                for rule in nested.rules.iter_mut() {
-                    rule.resolve_imports(resolver.clone(), in_progress)?
-                }
-                Ok(())
-            }
+            Nested(nested) => nested.resolve_imports_internal(resolver, in_progress),
             PropDef(..) | Constraint(..) => Ok(()),
         }
     }
@@ -425,6 +429,22 @@ impl Nested {
         for rule in self.rules.iter() {
             rule.add_to(build_context);
         }
+    }
+
+    pub fn resolve_imports<R: ImportResolver>(&mut self, resolver: &R) -> AstResult<()> {
+        let mut in_progress = vec![];
+        self.resolve_imports_internal(resolver, &mut in_progress)
+    }
+
+    pub fn resolve_imports_internal<R: ImportResolver>(
+        &mut self,
+        resolver: &R,
+        in_progress: &mut Vec<PathBuf>,
+    ) -> AstResult<()> {
+        for rule in self.rules.iter_mut() {
+            rule.resolve_imports(resolver, in_progress)?;
+        }
+        Ok(())
     }
 }
 impl Display for Nested {
@@ -662,7 +682,7 @@ mod tests {
                         } }; (OR (AND b e f) a c) { def baz }; def x; def baz; def foobar; def \
                         noothers; multi { def x; level { def x } }; z.underconstraint { def c }; \
                         @constrain z.underconstraint; def c }";
-        let parsed = parse(ccs).unwrap();
+        let parsed = parse(ccs, &NullResolver()).unwrap();
 
         assert_eq!(parsed.to_string(), expected);
     }

@@ -1,8 +1,12 @@
-use std::{collections::VecDeque, fmt::Display};
+use std::{collections::VecDeque, fmt::Display, path::Path};
 
 use crate::{
-    ast::{self, Constraint, JoinedBy, Key, PersistentStr, Property, PropertyValue, Specificity},
+    ast::{
+        self, Constraint, ImportResolver, JoinedBy, Key, PersistentStr, Property, PropertyValue,
+        Specificity,
+    },
     dag::{self, Node, NodeType},
+    load_helper,
     tracer::PropertyTracer,
 };
 
@@ -54,8 +58,21 @@ pub struct Context<Acc: Accumulator, Tracer: PropertyTracer> {
     state: ContextState<Acc>,
 }
 impl<Acc: Accumulator, Tracer: PropertyTracer> Context<Acc, Tracer> {
-    pub fn from_ccs_with_tracer(ccs: impl AsRef<str>, tracer: Tracer) -> crate::AstResult<Self> {
-        let rules = ast::parse(ccs)?;
+    pub fn load(
+        path: impl AsRef<Path>,
+        resolver: &impl ImportResolver,
+        tracer: Tracer,
+    ) -> crate::CcsResult<Self> {
+        let content = load_helper::load(path)?;
+        Ok(Self::from_ccs_with(&content, resolver, tracer)?)
+    }
+
+    pub fn from_ccs_with(
+        ccs: impl AsRef<str>,
+        resolver: &impl ImportResolver,
+        tracer: Tracer,
+    ) -> crate::AstResult<Self> {
+        let rules = ast::parse(ccs, resolver)?;
         let mut tree = ast::RuleTreeNode::default();
         rules.add_to(&mut tree);
         let dag = std::sync::Arc::new(dag::Dag::build(tree));
@@ -449,11 +466,11 @@ impl std::fmt::Debug for DisplayContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tracer::NullTracer;
+    use crate::{ast::NullResolver, tracer::NullTracer};
 
     impl Context<MaxAccumulator, NullTracer> {
         pub fn from_ccs(ccs: impl AsRef<str>) -> crate::AstResult<Self> {
-            Self::from_ccs_with_tracer(ccs, NullTracer {})
+            Self::from_ccs_with(ccs, &NullResolver(), NullTracer {})
         }
     }
 

@@ -8,27 +8,14 @@ fn main() -> Result<(), CcsError> {
         .target(env_logger::Target::Stdout)
         .init();
 
-    // Usually from a file
-    let ccs_str = r#"
-        a, f b e, c {
-            c d {
-                x = y
-            }
-            e f {
-                foobar = abc
-            }
-        }
+    let context = Context::logging("examples/configs/doc.ccs", log::Level::Info)?;
 
-        x = 42
-    "#;
-
-    let context = Context::logging(ccs_str, log::Level::Info)?;
-
-    let augmented = context.constrain("a").constrain("c").constrain("d");
-    assert_eq!(&augmented.get("x")?.to_type::<String>()?, "y");
-    assert!(augmented.get("foobar").is_err());
+    let constrained = context.constrain("a").constrain("c").constrain("d");
+    assert_eq!(&constrained.get_type::<String>("x")?, "y");
+    assert!(constrained.get("foobar").is_err());
 
     // Original context is untouched:
     assert_eq!(context.get("x")?.to_type::<i32>()?, 42);
+
     Ok::<(), ccs2::CcsError>(())
 }

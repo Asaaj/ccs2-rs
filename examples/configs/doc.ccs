@@ -1,0 +1,13 @@
+a, f b e, c {
+  c d {
+    x = y
+  }
+  e f {
+    foobar = abc
+  }
+}
+
+x = 42
+
+module : a = z
+env.prod : a = z

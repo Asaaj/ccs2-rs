@@ -639,7 +639,7 @@ pub mod dot {
 #[cfg(feature = "dot")]
 mod dot_tests {
     use crate::{
-        ast::RuleTreeNode,
+        ast::{NullResolver, RuleTreeNode},
         dag::{Dag, dot::to_dot_str},
     };
 
@@ -657,7 +657,7 @@ mod dot_tests {
 
     #[test]
     fn tree_to_dot_1() {
-        let n = crate::ast::parse(MULTILEVEL_EXAMPLE).unwrap();
+        let n = crate::ast::parse(MULTILEVEL_EXAMPLE, &NullResolver()).unwrap();
 
         let mut tree = RuleTreeNode::default();
         n.add_to(&mut tree);
@@ -675,6 +675,7 @@ mod dot_tests {
                     x = y
                 }
             "#,
+            &NullResolver(),
         )
         .unwrap();
 

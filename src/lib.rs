@@ -1,25 +1,26 @@
 //! # Welcome to CCS2!
 //!
-//! Let's get started with an example to show some of the common use-cases:
+//! Let's get started with an example to show some of the common use-cases. Given a file called
+//! `doc.ccs` with the following contents:
+//!
+//! ```text
+//! a, f b e, c {
+//!   c d {
+//!     x = y
+//!   }
+//!   e f {
+//!     foobar = abc
+//!   }
+//! }
+//!
+//! x = 42
+//! ```
+//! ... you may want to do something like this:
 //!
 //! ```
 //! use ccs2::{Context, ToType};
 //!
-//! // Usually from a file
-//! let ccs_str = r#"
-//! a, f b e, c {
-//!     c d {
-//!         x = y
-//!     }
-//!     e f {
-//!         foobar = abc
-//!     }
-//! }
-//!
-//! x = 42
-//! "#;
-//!
-//! let context = Context::logging(ccs_str, log::Level::Info)?;
+//! let context = Context::logging("examples/configs/doc.ccs", log::Level::Info)?;
 //!
 //! let constrained = context.constrain("a").constrain("c").constrain("d");
 //! assert_eq!(&constrained.get_type::<String>("x")?, "y");
@@ -30,27 +31,29 @@
 //! # Ok::<(), ccs2::CcsError>(())
 //! ```
 //!
-//! Example output (if logger is configured). Note the file name on `origin` is missing, since we
-//! aren't loading a file:
+//! Example output (if logger is configured):
 //!
 //! ```text
 //! [2025-10-23T20:51:27Z INFO  ccs2::tracer::log_tracer] Found property: x = y
 //!         in context: [ a > c > d ]
-//!         origin: :4
+//!         origin: doc.ccs:4
 //! [2025-10-23T20:51:27Z INFO  ccs2::tracer::log_tracer] Found property: x = 42
 //!         in context: [  ]
-//!         origin: :11
+//!         origin: doc.ccs:11
 //! ```
 //!
 //! # Incomplete Requirements
 //!
 //! The following requirements are not yet complete:
-//! - `@import` does not work; I still need to add support for import resolvers and filename
-//!   tracking.
-//! - `stable` channel support: I'm currently on `nightly` for some odd `thiserror` reasons, but I
-//!   don't think I should require that. I'll need to figure that out.
-//! - Opt-in Arc vs Rc context?
-//! - Much better error information for CCS syntax issues.
+//! - [x] `@import` does not work; I still need to add support for import resolvers and filename
+//!       tracking.
+//! - [ ] The parser doesn't track files right now, which isn't great.
+//! - [ ] Log when a property could not be found, and when it's ambiguous.
+//! - [ ] `stable` channel support: I'm currently on `nightly` for some odd `thiserror` reasons, but I
+//!       don't think I should require that. I'll need to figure that out.
+//! - [ ] Opt-in Arc vs Rc context?
+//! - [ ] Much better error information for CCS syntax issues.
+//!
 //! - ... Probably a bunch of other stuff, I'll add to this as I think of things.
 //!
 //! # Features
@@ -69,15 +72,19 @@
 pub mod ast;
 pub mod dag;
 
+mod load_helper;
 mod property_helper;
 mod search;
 mod tracer;
 
+use std::path::Path;
+
 #[cfg(feature = "log")]
 pub use crate::tracer::log_tracer::LogTracer;
 pub use crate::{
-    ast::{AstError, AstResult, PersistentStr, PropertyValue},
+    ast::{AstError, AstResult, ImportResolver, PersistentStr, PropertyValue},
     dag::Stats as DagStats,
+    load_helper::{IoError, IoResult, RelativePathResolver},
     property_helper::{
         CommaSeparatedList, ConversionFailed, ConversionResult, ToType, TypedProperty,
     },
@@ -92,6 +99,7 @@ pub use crate::{
 pub enum ContextError {
     #[error(transparent)]
     SearchError(#[from] SearchError),
+
     #[error(transparent)]
     ConversionError(#[from] ConversionFailed),
 }
@@ -104,25 +112,29 @@ pub type ContextResult<T> = Result<T, ContextError>;
 /// See [`CcsResult`]
 #[derive(thiserror::Error, Debug)]
 pub enum CcsError {
-    /// Temporarily here; need to move this when we do import resolution and better file handling
-    #[error("Failed to find file {0:?}")]
-    FileNotFound(std::path::PathBuf),
-    /// Also probably temporary; some other IO error happened while loading or something
     #[error(transparent)]
-    Io(#[from] std::io::Error),
+    IoError(#[from] IoError),
 
     #[error(transparent)]
     AstError(#[from] AstError),
+
     #[error(transparent)]
     SearchError(#[from] SearchError),
+
     #[error(transparent)]
     ConversionError(#[from] ConversionFailed),
+
     #[error(transparent)]
     ContextError(#[from] ContextError),
 }
 pub type CcsResult<T> = Result<T, CcsError>;
 
 /// The primary representation of a CCS search state
+///
+/// Typically you'll want the [`Context::logging`] constructor, or (if not using the `log` feature),
+/// the [`Context::load_with_tracer`]. See [`PropertyTracer`] for more information.
+///
+/// In tests, you may want [`Context::from_str`] with test implementations of resolvers and tracers.
 #[derive(Clone)]
 pub struct Context<Tracer: PropertyTracer> {
     context: search::Context<search::MaxAccumulator, Tracer>,
@@ -130,28 +142,69 @@ pub struct Context<Tracer: PropertyTracer> {
 
 #[cfg(feature = "log")]
 impl Context<LogTracer> {
-    /// Creates a context that logs when and where properties are found
+    /// Loads a CCS file, and creates a context that logs when and where properties are found
+    ///
+    /// Uses the [`RelativePathResolver`]
     ///
     /// See [`PropertyTracer`] and [`LogTracer`] for more.
-    pub fn logging(ccs: impl AsRef<str>, level: log::Level) -> Result<Self, AstError> {
-        Self::new(ccs, LogTracer(level))
+    pub fn logging(path: impl AsRef<Path>, level: log::Level) -> CcsResult<Self> {
+        let path = path.as_ref();
+        Self::load(path, &Self::default_resolver(&path), LogTracer(level))
     }
 }
 
 impl Context<NullTracer> {
     /// Creates a context that does not trace when or where properties are found
-    pub fn without_tracing(ccs: impl AsRef<str>) -> Result<Self, AstError> {
-        Self::new(ccs, NullTracer {})
+    ///
+    /// Will use an empty [`ImportResolver`], that just skips over import statements. To provide a
+    /// different `ImportResolver`, use [`Context::from_str`]
+    ///
+    /// Generally this is most useful in tests.
+    pub fn from_str_without_tracing(ccs: impl AsRef<str>) -> AstResult<Self> {
+        Self::from_str(ccs, &ast::NullResolver(), NullTracer {})
     }
 }
 
 impl<Tracer: PropertyTracer> Context<Tracer> {
-    /// Creates a context with the provided tracer
+    fn default_resolver(path: impl AsRef<Path>) -> impl ImportResolver {
+        RelativePathResolver::from_main_file(path)
+    }
+
+    /// Loads a CCS file, and creates a context with the provided tracer
+    ///
+    /// Uses the [`RelativePathResolver`]
     ///
     /// See [`PropertyTracer`] for more.
-    pub fn new(ccs: impl AsRef<str>, tracer: Tracer) -> Result<Self, AstError> {
+    pub fn load_with_tracer(path: impl AsRef<Path>, tracer: Tracer) -> CcsResult<Self> {
+        let path = path.as_ref();
+        Self::load(path, &Self::default_resolver(&path), tracer)
+    }
+
+    /// Loads a CCS file, and creates a context with the provided import resolver and tracer
+    ///
+    /// See [`ImportResolver`] [`PropertyTracer`] for more.
+    pub fn load(
+        path: impl AsRef<Path>,
+        resolver: &impl ImportResolver,
+        tracer: Tracer,
+    ) -> CcsResult<Self> {
         Ok(Self {
-            context: search::Context::from_ccs_with_tracer(ccs, tracer)?,
+            context: search::Context::load(path, resolver, tracer)?,
+        })
+    }
+
+    /// Creates a context from a provided CCS string, using the provided import resolver and tracer
+    ///
+    /// See [`ImportResolver`] [`PropertyTracer`] for more.
+    ///
+    /// Mostly useful for tests.
+    pub fn from_str(
+        ccs: impl AsRef<str>,
+        resolver: &impl ImportResolver,
+        tracer: Tracer,
+    ) -> AstResult<Self> {
+        Ok(Self {
+            context: search::Context::from_ccs_with(ccs, resolver, tracer)?,
         })
     }
 
@@ -160,32 +213,32 @@ impl<Tracer: PropertyTracer> Context<Tracer> {
     /// # Example: Key-only constraint
     /// Given the following CCS:
     /// ```text
-    /// module : x = y
+    /// module : a = z
     /// ```
-    /// the property `x` can be retrieved through constraining with `"module"`:
+    /// the property `a` can be retrieved through constraining with `"module"`:
     ///
     /// ```
-    /// # let context = ccs2::Context::new("module : x = y", ccs2::NullTracer{}).unwrap();
-    /// assert!(context.get_value("x").is_err());
+    /// # let context = ccs2::Context::logging("examples/configs/doc.ccs", log::Level::Info).unwrap();
+    /// assert!(context.get_value("a").is_err());
     ///
-    /// let x: &str = &context.constrain("module").get_value("x")?;
-    /// assert_eq!(x, "y");
+    /// let x: &str = &context.constrain("module").get_value("a")?;
+    /// assert_eq!(x, "z");
     /// # Ok::<(), ccs2::SearchError>(())
     /// ```
     ///
     /// # Example: Key-value constraint
     /// Given the following CCS;
     /// ```text
-    /// env.prod : x = y
+    /// env.prod : a = z
     /// ```
-    /// the property `x` can be retrieved through constraining with `("env", "prod")`:
+    /// the property `a` can be retrieved through constraining with `("env", "prod")`:
     ///
     /// ```
-    /// # let context = ccs2::Context::new("env.prod : x = y", ccs2::NullTracer{}).unwrap();
-    /// assert!(context.constrain("env").get_value("x").is_err());
+    /// # let context = ccs2::Context::logging("examples/configs/doc.ccs", log::Level::Info).unwrap();
+    /// assert!(context.constrain("env").get_value("a").is_err());
     ///
-    /// let x: &str = &context.constrain(("env", "prod")).get_value("x")?;
-    /// assert_eq!(x, "y");
+    /// let x: &str = &context.constrain(("env", "prod")).get_value("a")?;
+    /// assert_eq!(x, "z");
     /// # Ok::<(), ccs2::SearchError>(())
     /// ```
     pub fn constrain(&self, constraint: impl AsKey) -> Self {
