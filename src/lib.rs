@@ -46,20 +46,20 @@
 //!
 //! The following requirements are not yet complete:
 //! - `@import` does not work; I still need to add support for import resolvers and filename
-//! tracking.
+//!   tracking.
 //! - `stable` channel support: I'm currently on `nightly` for some odd `thiserror` reasons, but I
-//! don't think I should require that. I'll need to figure that out.
+//!   don't think I should require that. I'll need to figure that out.
 //! - ... Probably a bunch of other stuff, I'll add to this as I think of things.
 //!
 //! # Features
 //!
 //! The crate provides the following features:
 //! - `log` (default): Adds the [`LogTracer`] for logging when properties are found. Adds a
-//! dependency on [`log`].
+//!   dependency on [`log`].
 //! - `extra_conversions` (default): Adds a parser for getting [`std::time::Duration`] from CCS
-//! property strings. Adds a dependency on [`humantime`].
+//!   property strings. Adds a dependency on [`humantime`].
 //! - `dot`: Adds tools for exporting the underlying DAG to `dot` syntax, which allows for
-//! visualizing the context's state. Adds a dependency on [`petgraph`].
+//!   visualizing the context's state. Adds a dependency on [`petgraph`].
 
 // Used for thiserror backtrace:
 #![feature(error_generic_member_access)]
