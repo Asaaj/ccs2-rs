@@ -32,8 +32,11 @@ pub struct RelativePathResolver(PathBuf);
 impl RelativePathResolver {
     /// A convenience function for creating based on a specific path, such as the `main.ccs`
     ///
-    /// Note that the source must be an absolute path, but this will then allow for resolving
+    /// Note that the source should be an absolute path, but this will then allow for resolving
     /// relative to the parent directory of the given file.
+    ///
+    /// If the source isn't absolute, it will go relative to the current working directory. However,
+    /// subsequent resolvers created through [`ImportResolver::new_context`] _will_ be absolute.
     pub fn siblings_with(file: impl AsRef<Path>) -> AstResult<Self> {
         let path: PathBuf = file.as_ref().into();
         if !path.is_file() {

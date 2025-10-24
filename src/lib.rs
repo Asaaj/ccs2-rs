@@ -36,10 +36,10 @@
 //! ```text
 //! [2025-10-23T20:51:27Z INFO  ccs2::tracer::log_tracer] Found property: x = y
 //!         in context: [ a > c > d ]
-//!         origin: doc.ccs:4
+//!         origin: examples/configs/doc.ccs:3
 //! [2025-10-23T20:51:27Z INFO  ccs2::tracer::log_tracer] Found property: x = 42
 //!         in context: [  ]
-//!         origin: doc.ccs:11
+//!         origin: examples/configs/doc.ccs:10
 //! ```
 //!
 //! # Incomplete Requirements
