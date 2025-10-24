@@ -102,6 +102,13 @@ pub type ContextResult<T> = Result<T, ContextError>;
 /// See [`CcsResult`]
 #[derive(thiserror::Error, Debug)]
 pub enum CcsError {
+    /// Temporarily here; need to move this when we do import resolution and better file handling
+    #[error("Failed to find file {0:?}")]
+    FileNotFound(std::path::PathBuf),
+    /// Also probably temporary; some other IO error happened while loading or something
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
     #[error(transparent)]
     AstError(#[from] AstError),
     #[error(transparent)]
