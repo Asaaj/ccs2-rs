@@ -31,7 +31,7 @@ pub type ParseResult<T> = Result<T, ParseError>;
 
 pub fn parse(
     file_contents: impl AsRef<str>,
-    resolver: &impl ImportResolver,
+    resolver: impl ImportResolver,
     in_progress: &mut Vec<PathBuf>,
 ) -> AstResult<Nested> {
     let mut file = Ccs2Parser::parse(Rule::file, file_contents.as_ref())
@@ -42,7 +42,7 @@ pub fn parse(
 
     assert_eq!(file.next().map(|p| p.as_rule()), Some(Rule::EOI));
 
-    nested.resolve_imports_internal(resolver, in_progress)?;
+    nested.resolve_imports_internal(&resolver, in_progress)?;
 
     Ok(nested)
 }
@@ -526,7 +526,7 @@ mod tests {
     }
 
     fn test_impl(to_parse: &str, should_succeed: bool) -> Result<()> {
-        let res = parse(to_parse, &NullResolver(), &mut vec![]);
+        let res = parse(to_parse, NullResolver(), &mut vec![]);
         if should_succeed {
             assert!(res.is_ok(), "Expected success, got error: {res:?}");
         } else {
@@ -545,7 +545,7 @@ mod tests {
             prop1 = val1
         }
         "#;
-        let parsed = parse(example, &NullResolver(), &mut vec![])?;
+        let parsed = parse(example, NullResolver(), &mut vec![])?;
 
         assert_eq!(parsed.rules.len(), 1);
         let rule = parsed.rules.into_iter().next().unwrap();

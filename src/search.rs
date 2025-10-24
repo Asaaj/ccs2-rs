@@ -60,7 +60,7 @@ pub struct Context<Acc: Accumulator, Tracer: PropertyTracer> {
 impl<Acc: Accumulator, Tracer: PropertyTracer> Context<Acc, Tracer> {
     pub fn load(
         path: impl AsRef<Path>,
-        resolver: &impl ImportResolver,
+        resolver: impl ImportResolver,
         tracer: Tracer,
     ) -> crate::CcsResult<Self> {
         let content = load_helper::load(path)?;
@@ -69,7 +69,7 @@ impl<Acc: Accumulator, Tracer: PropertyTracer> Context<Acc, Tracer> {
 
     pub fn from_ccs_with(
         ccs: impl AsRef<str>,
-        resolver: &impl ImportResolver,
+        resolver: impl ImportResolver,
         tracer: Tracer,
     ) -> crate::AstResult<Self> {
         let rules = ast::parse(ccs, resolver)?;
@@ -470,7 +470,7 @@ mod tests {
 
     impl Context<MaxAccumulator, NullTracer> {
         pub fn from_ccs(ccs: impl AsRef<str>) -> crate::AstResult<Self> {
-            Self::from_ccs_with(ccs, &NullResolver(), NullTracer {})
+            Self::from_ccs_with(ccs, NullResolver(), NullTracer {})
         }
     }
 

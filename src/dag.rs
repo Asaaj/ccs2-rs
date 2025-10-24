@@ -657,7 +657,7 @@ mod dot_tests {
 
     #[test]
     fn tree_to_dot_1() {
-        let n = crate::ast::parse(MULTILEVEL_EXAMPLE, &NullResolver()).unwrap();
+        let n = crate::ast::parse(MULTILEVEL_EXAMPLE, NullResolver()).unwrap();
 
         let mut tree = RuleTreeNode::default();
         n.add_to(&mut tree);
@@ -675,7 +675,7 @@ mod dot_tests {
                     x = y
                 }
             "#,
-            &NullResolver(),
+            NullResolver(),
         )
         .unwrap();
 

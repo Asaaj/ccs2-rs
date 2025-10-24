@@ -30,32 +30,34 @@ pub fn load(path: impl AsRef<Path>) -> IoResult<String> {
 /// The default import resolver, which resolves everything relative to one initial path
 pub struct RelativePathResolver(PathBuf);
 impl RelativePathResolver {
-    /// Given an absolute directory, this will resolve imports relative to that directory
-    pub fn rooted_in(directory: impl AsRef<Path>) -> Self {
-        let path = directory.as_ref();
-        assert!(
-            path.is_dir(),
-            "Cannot create SameDirectoryResolver from invalid directory: {path:?}"
-        );
-        Self(path.into())
-    }
-
     /// A convenience function for creating based on a specific path, such as the `main.ccs`
     ///
     /// Note that the source must be an absolute path, but this will then allow for resolving
-    /// relative to the parent directory of the `main.ccs` file (or whatever is provided).
-    pub fn from_main_file(file: impl AsRef<Path>) -> Self {
-        let path = file.as_ref();
-        assert!(
-            path.is_file(),
-            "Cannot create SameDirectoryResolver from invalid file: {path:?}"
-        );
-        Self(path.parent().unwrap().into())
+    /// relative to the parent directory of the given file.
+    pub fn siblings_with(file: impl AsRef<Path>) -> AstResult<Self> {
+        let path: PathBuf = file.as_ref().into();
+        if !path.is_file() {
+            Err(AstError::ImportFailed(path))
+        } else {
+            Ok(Self(path))
+        }
     }
 }
 impl ImportResolver for RelativePathResolver {
-    fn resolve(&self, location: &Path) -> AstResult<String> {
-        let location = self.0.join(location);
-        std::fs::read_to_string(&location).map_err(|_| AstError::ImportFailed(location))
+    fn current_file_name(&self) -> PathBuf {
+        self.0.clone()
+    }
+
+    fn new_context(&self, location: &Path) -> AstResult<Self> {
+        let new_file = self
+            .0
+            .parent()
+            .ok_or(AstError::ImportFailed(location.into()))?
+            .join(location);
+        Self::siblings_with(new_file)
+    }
+
+    fn load(&self) -> AstResult<String> {
+        std::fs::read_to_string(&self.0).map_err(|_| AstError::ImportFailed(self.0.clone()))
     }
 }

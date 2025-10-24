@@ -159,7 +159,7 @@ mod tests {
             }
             a, c, b e f : baz = quux
         "#;
-        let n = parse(ccs, &NullResolver()).unwrap();
+        let n = parse(ccs, NullResolver()).unwrap();
         let mut tree = RuleTreeNode::default();
         n.add_to(&mut tree);
 

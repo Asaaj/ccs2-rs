@@ -31,7 +31,7 @@
 //! # Ok::<(), ccs2::CcsError>(())
 //! ```
 //!
-//! Example output (if logger is configured):
+//! Example output (if logger is configured). Note that the actual origin will typically be absolute:
 //!
 //! ```text
 //! [2025-10-23T20:51:27Z INFO  ccs2::tracer::log_tracer] Found property: x = y
@@ -47,7 +47,7 @@
 //! The following requirements are not yet complete:
 //! - [x] `@import` does not work; I still need to add support for import resolvers and filename
 //!       tracking.
-//! - [ ] The parser doesn't track files right now, which isn't great.
+//! - [x] The parser doesn't track files right now, which isn't great.
 //! - [ ] Log when a property could not be found, and when it's ambiguous.
 //! - [ ] `stable` channel support: I'm currently on `nightly` for some odd `thiserror` reasons, but I
 //!       don't think I should require that. I'll need to figure that out.
@@ -149,7 +149,7 @@ impl Context<LogTracer> {
     /// See [`PropertyTracer`] and [`LogTracer`] for more.
     pub fn logging(path: impl AsRef<Path>, level: log::Level) -> CcsResult<Self> {
         let path = path.as_ref();
-        Self::load(path, &Self::default_resolver(&path), LogTracer(level))
+        Self::load(path, Self::default_resolver(&path)?, LogTracer(level))
     }
 }
 
@@ -161,13 +161,13 @@ impl Context<NullTracer> {
     ///
     /// Generally this is most useful in tests.
     pub fn from_str_without_tracing(ccs: impl AsRef<str>) -> AstResult<Self> {
-        Self::from_str(ccs, &ast::NullResolver(), NullTracer {})
+        Self::from_str(ccs, ast::NullResolver(), NullTracer {})
     }
 }
 
 impl<Tracer: PropertyTracer> Context<Tracer> {
-    fn default_resolver(path: impl AsRef<Path>) -> impl ImportResolver {
-        RelativePathResolver::from_main_file(path)
+    fn default_resolver(path: impl AsRef<Path>) -> CcsResult<impl ImportResolver> {
+        Ok(RelativePathResolver::siblings_with(path)?)
     }
 
     /// Loads a CCS file, and creates a context with the provided tracer
@@ -177,7 +177,7 @@ impl<Tracer: PropertyTracer> Context<Tracer> {
     /// See [`PropertyTracer`] for more.
     pub fn load_with_tracer(path: impl AsRef<Path>, tracer: Tracer) -> CcsResult<Self> {
         let path = path.as_ref();
-        Self::load(path, &Self::default_resolver(&path), tracer)
+        Self::load(path, Self::default_resolver(&path)?, tracer)
     }
 
     /// Loads a CCS file, and creates a context with the provided import resolver and tracer
@@ -185,7 +185,7 @@ impl<Tracer: PropertyTracer> Context<Tracer> {
     /// See [`ImportResolver`] [`PropertyTracer`] for more.
     pub fn load(
         path: impl AsRef<Path>,
-        resolver: &impl ImportResolver,
+        resolver: impl ImportResolver,
         tracer: Tracer,
     ) -> CcsResult<Self> {
         Ok(Self {
@@ -200,7 +200,7 @@ impl<Tracer: PropertyTracer> Context<Tracer> {
     /// Mostly useful for tests.
     pub fn from_str(
         ccs: impl AsRef<str>,
-        resolver: &impl ImportResolver,
+        resolver: impl ImportResolver,
         tracer: Tracer,
     ) -> AstResult<Self> {
         Ok(Self {

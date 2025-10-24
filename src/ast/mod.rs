@@ -24,7 +24,7 @@ pub use formula::{Clause, Formula};
 pub use property::{Property, PropertyValue};
 pub use rule_tree::RuleTreeNode;
 
-pub fn parse(file_contents: impl AsRef<str>, resolver: &impl ImportResolver) -> AstResult<Nested> {
+pub fn parse(file_contents: impl AsRef<str>, resolver: impl ImportResolver) -> AstResult<Nested> {
     parser::parse(file_contents, resolver, &mut vec![])
 }
 
@@ -235,13 +235,25 @@ impl Display for Selector {
 
 /// Provides a binding to paths which are used for resolving `@import` expressions
 pub trait ImportResolver {
-    fn resolve(&self, location: &Path) -> AstResult<String>;
+    fn current_file_name(&self) -> PathBuf;
+
+    fn new_context(&self, location: &Path) -> AstResult<Self>
+    where
+        Self: Sized;
+
+    fn load(&self) -> AstResult<String>;
 }
 
 /// Only used for testing, shouldn't be made public
 pub(crate) struct NullResolver();
 impl ImportResolver for NullResolver {
-    fn resolve(&self, _: &std::path::Path) -> crate::AstResult<String> {
+    fn current_file_name(&self) -> PathBuf {
+        PathBuf::new()
+    }
+    fn new_context(&self, _: &Path) -> AstResult<Self> {
+        Ok(Self())
+    }
+    fn load(&self) -> AstResult<String> {
         Ok("".to_string())
     }
 }
@@ -334,15 +346,21 @@ impl AstNode {
                     Err(AstError::CircularImport(import.location.clone()))
                 } else {
                     in_progress.push(import.location.clone());
-                    let nested =
-                        parser::parse(resolver.resolve(&import.location)?, resolver, in_progress)?;
 
+                    let resolver = resolver.new_context(&import.location)?;
+                    let nested = parser::parse(resolver.load()?, resolver, in_progress)?;
+
+                    in_progress.pop(); // TODO: Be more careful?
                     import.ast = Some(Box::new(AstNode::Nested(nested)));
                     Ok(())
                 }
             }
             Nested(nested) => nested.resolve_imports_internal(resolver, in_progress),
-            PropDef(..) | Constraint(..) => Ok(()),
+            PropDef(prop_def) => {
+                prop_def.origin.filename = resolver.current_file_name();
+                Ok(())
+            }
+            Constraint(..) => Ok(()),
         }
     }
 }
@@ -682,7 +700,7 @@ mod tests {
                         } }; (OR (AND b e f) a c) { def baz }; def x; def baz; def foobar; def \
                         noothers; multi { def x; level { def x } }; z.underconstraint { def c }; \
                         @constrain z.underconstraint; def c }";
-        let parsed = parse(ccs, &NullResolver()).unwrap();
+        let parsed = parse(ccs, NullResolver()).unwrap();
 
         assert_eq!(parsed.to_string(), expected);
     }

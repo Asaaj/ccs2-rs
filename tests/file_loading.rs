@@ -69,3 +69,24 @@ fn circular_import() -> CcsResult<()> {
     );
     Ok(())
 }
+
+#[test]
+fn imported_multiple_times() -> CcsResult<()> {
+    let context = Context::load_with_tracer(
+        resolve_example("configs/imports/multiple_times.ccs"),
+        EPrintTracer(),
+    )?;
+
+    assert!(context.get("x").is_err());
+
+    let context1 = context.constrain("context1");
+    assert_eq!(&*context1.get_value("x")?, "success");
+
+    let context2 = context.constrain("context2");
+    assert_eq!(&*context2.get_value("x")?, "success");
+
+    let context3 = context.constrain("context3");
+    assert_eq!(&*context3.get_value("x")?, "success");
+
+    Ok(())
+}

@@ -1,0 +1,9 @@
+context1 {
+  @import 'in_context.ccs'
+}
+context2 {
+  @import 'in_context.ccs'
+}
+context3 {
+  @import 'in_context.ccs'
+}
