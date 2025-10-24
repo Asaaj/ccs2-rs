@@ -42,13 +42,15 @@
 //!         origin: :11
 //! ```
 //!
-//! # Imcomplete Requirements
+//! # Incomplete Requirements
 //!
 //! The following requirements are not yet complete:
 //! - `@import` does not work; I still need to add support for import resolvers and filename
 //!   tracking.
 //! - `stable` channel support: I'm currently on `nightly` for some odd `thiserror` reasons, but I
 //!   don't think I should require that. I'll need to figure that out.
+//! - Opt-in Arc vs Rc context?
+//! - Much better error information for CCS syntax issues.
 //! - ... Probably a bunch of other stuff, I'll add to this as I think of things.
 //!
 //! # Features
