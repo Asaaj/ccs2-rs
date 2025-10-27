@@ -90,3 +90,14 @@ fn imported_multiple_times() -> CcsResult<()> {
 
     Ok(())
 }
+
+#[test]
+fn subdirectories_are_relative_to_importer() -> CcsResult<()> {
+    let context = Context::load_with_tracer(
+        resolve_example("configs/imports/imports_directory.ccs"),
+        EPrintTracer(),
+    )?;
+
+    assert_eq!(context.constrain("outercontext").get_type::<i32>("x")?, 42);
+    Ok(())
+}
