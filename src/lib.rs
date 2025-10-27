@@ -44,6 +44,8 @@
 //!         origin: examples/configs/doc.ccs:10
 //! ```
 //!
+//! Most of the public API is in [`Context`], so check there for a resonable starting point.
+//!
 //! # Incomplete Requirements
 //!
 //! The following requirements are not yet complete:
@@ -51,6 +53,7 @@
 //!       tracking.
 //! - [x] The parser doesn't track files right now, which isn't great.
 //! - [x] Log when a property could not be found, and when it's ambiguous.
+//! - [x] Support search with default value, which doesn't return a `Result`.
 //! - [ ] `stable` channel support: I'm currently on `nightly` for some odd `thiserror` reasons, but I
 //!       don't think I should require that. I'll need to figure that out.
 //! - [ ] Opt-in Arc vs Rc context?
@@ -266,8 +269,34 @@ impl<Tracer: PropertyTracer> Context<Tracer> {
     /// Helper for the ever-common "get and convert" pattern
     ///
     /// `context.get_type::<T>(prop)` is basically equivalent to `context.get(prop)?.to_type::<T>()`
+    ///
+    /// ```
+    /// # let context = ccs2::Context::logging("examples/configs/doc.ccs", log::Level::Info).unwrap();
+    /// assert_eq!(context.get_type::<i32>("x")?, 42);
+    /// # Ok::<(), ccs2::ContextError>(())
+    /// ```
     pub fn get_type<T: TypedProperty>(&self, prop: impl AsRef<str>) -> ContextResult<T> {
         Ok(self.get(prop)?.to_type::<T>()?)
+    }
+
+    /// Get a typed value, or provide the default if it cannot be found
+    ///
+    /// ```
+    /// # let context = ccs2::Context::logging("examples/configs/doc.ccs", log::Level::Info).unwrap();
+    /// assert_eq!(&context.get_or("undefined", "default_val".to_string()), "default_val");
+    /// ```
+    pub fn get_or<T: TypedProperty>(&self, prop: impl AsRef<str>, default: T) -> T {
+        self.get_type::<T>(prop).unwrap_or(default)
+    }
+
+    /// Get a typed value, or return the type's [`Default`] value
+    ///
+    /// ```
+    /// # let context = ccs2::Context::logging("examples/configs/doc.ccs", log::Level::Info).unwrap();
+    /// assert_eq!(&context.get_or_default::<String>("undefined"), "");
+    /// ```
+    pub fn get_or_default<T: TypedProperty + Default>(&self, prop: impl AsRef<str>) -> T {
+        self.get_type::<T>(prop).unwrap_or_default()
     }
 
     /// Retrieves the current context's queue of applied constraints, in the order they were applied
