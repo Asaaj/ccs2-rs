@@ -20,14 +20,24 @@ type Dag = std::sync::Arc<crate::dag::Dag>;
 /// Represents a problem finding a property in the current context
 ///
 /// See [`SearchResult`]
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, Clone)]
 pub enum SearchError {
-    #[error("Failed to find property '{0}' {1}")]
-    MissingPropertyError(String, DisplayContext),
-    #[error("Property '{0}' has no values {1}")]
-    EmptyPropertyError(String, DisplayContext),
-    #[error("Found {0} properties matching '{1}' {2}")]
-    AmbiguousPropertyError(usize, String, DisplayContext),
+    #[error("Failed to find property '{name}' {context}")]
+    MissingPropertyError {
+        name: String,
+        context: DisplayContext,
+    },
+    #[error("Property '{name}' has no values {context}")]
+    EmptyPropertyError {
+        name: String,
+        context: DisplayContext,
+    },
+    #[error("Found {count} properties matching '{name}' {context}")]
+    AmbiguousPropertyError {
+        count: usize,
+        name: String,
+        context: DisplayContext,
+    },
 }
 
 pub type SearchResult<T> = std::result::Result<T, SearchError>;
@@ -90,34 +100,40 @@ impl<Acc: Accumulator, Tracer: PropertyTracer> Context<Acc, Tracer> {
         self.augment_all([key.clone()], false)
     }
 
-    pub fn get_single_property(&self, prop: impl AsRef<str>) -> SearchResult<PropertyValue> {
-        let prop = prop.as_ref().to_string();
+    pub fn get_single_property(&self, name: impl AsRef<str>) -> SearchResult<PropertyValue> {
+        let name = name.as_ref().to_string();
 
-        let contenders = self.state.props.get(prop.as_str());
+        let contenders = self.state.props.get(name.as_str());
         let mut properties = match contenders {
             Some(contenders) => contenders.values(),
             None => {
-                return Err(SearchError::MissingPropertyError(
-                    prop,
-                    self.state.display_context(),
-                ));
+                let err = SearchError::MissingPropertyError {
+                    name,
+                    context: self.state.display_context(),
+                };
+                self.tracer.on_error(err.clone());
+                return Err(err);
             }
         };
         if properties.len() == 0 {
-            Err(SearchError::EmptyPropertyError(
-                prop,
-                self.state.display_context(),
-            ))
+            let err = SearchError::EmptyPropertyError {
+                name,
+                context: self.state.display_context(),
+            };
+            self.tracer.on_error(err.clone());
+            Err(err)
         } else if properties.len() > 1 {
-            Err(SearchError::AmbiguousPropertyError(
-                properties.len(),
-                prop,
-                self.state.display_context(),
-            ))
+            let err = SearchError::AmbiguousPropertyError {
+                count: properties.len(),
+                name,
+                context: self.state.display_context(),
+            };
+            self.tracer.on_error(err.clone());
+            Err(err)
         } else {
             let matching = properties.next().unwrap();
             self.tracer
-                .trace(&prop, matching, self.state.display_context());
+                .on_found(&name, matching, self.state.display_context());
             Ok(matching.clone())
         }
     }
@@ -451,6 +467,7 @@ impl<Acc: Accumulator> ContextState<Acc> {
 
 /// Contains the constraints which have been applied to the current context. Formats nicely for
 /// debugging and logging.
+#[derive(Clone)]
 pub struct DisplayContext(pub PersistentQueue<Constraint>);
 impl Display for DisplayContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -489,12 +506,12 @@ mod tests {
 
         assert!(matches!(
             ctx.get_single_value("a"),
-            Err(SearchError::AmbiguousPropertyError(2, ..))
+            Err(SearchError::AmbiguousPropertyError { count: 2, .. })
         ));
 
         assert!(matches!(
             ctx.get_single_value("b"),
-            Err(SearchError::MissingPropertyError(..))
+            Err(SearchError::MissingPropertyError { .. })
         ));
 
         assert_eq!(&*ctx.get_single_value("c").unwrap(), "4.3");

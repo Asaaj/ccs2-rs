@@ -34,10 +34,12 @@
 //! Example output (if logger is configured). Note that the actual origin will typically be absolute:
 //!
 //! ```text
-//! [2025-10-23T20:51:27Z INFO  ccs2::tracer::log_tracer] Found property: x = y
+//! [2025-10-27T15:22:32Z INFO  ccs2::tracer::log] Found property: x = y
 //!         in context: [ a > c > d ]
 //!         origin: examples/configs/doc.ccs:3
-//! [2025-10-23T20:51:27Z INFO  ccs2::tracer::log_tracer] Found property: x = 42
+//! [2025-10-27T15:22:32Z INFO  ccs2::tracer::log] Property not found: foobar
+//!         in context: [ a > c > d ]
+//! [2025-10-27T15:22:32Z INFO  ccs2::tracer::log] Found property: x = 42
 //!         in context: [  ]
 //!         origin: examples/configs/doc.ccs:10
 //! ```
@@ -48,7 +50,7 @@
 //! - [x] `@import` does not work; I still need to add support for import resolvers and filename
 //!       tracking.
 //! - [x] The parser doesn't track files right now, which isn't great.
-//! - [ ] Log when a property could not be found, and when it's ambiguous.
+//! - [x] Log when a property could not be found, and when it's ambiguous.
 //! - [ ] `stable` channel support: I'm currently on `nightly` for some odd `thiserror` reasons, but I
 //!       don't think I should require that. I'll need to figure that out.
 //! - [ ] Opt-in Arc vs Rc context?
@@ -80,7 +82,7 @@ mod tracer;
 use std::path::Path;
 
 #[cfg(feature = "log")]
-pub use crate::tracer::log_tracer::LogTracer;
+pub use crate::tracer::log::LogTracer;
 pub use crate::{
     ast::{AstError, AstResult, ImportResolver, PersistentStr, PropertyValue},
     dag::Stats as DagStats,
@@ -149,7 +151,11 @@ impl Context<LogTracer> {
     /// See [`PropertyTracer`] and [`LogTracer`] for more.
     pub fn logging(path: impl AsRef<Path>, level: log::Level) -> CcsResult<Self> {
         let path = path.as_ref();
-        Self::load(path, Self::default_resolver(&path)?, LogTracer(level))
+        Self::load(
+            path,
+            Self::default_resolver(&path)?,
+            LogTracer::single_level(level),
+        )
     }
 }
 

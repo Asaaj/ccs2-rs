@@ -14,11 +14,29 @@ fn resolve_example(example_path: impl AsRef<Path>) -> PathBuf {
 #[derive(Copy, Clone)]
 struct EPrintTracer();
 impl PropertyTracer for EPrintTracer {
-    fn trace(&self, name: &str, value: &PropertyValue, context: DisplayContext) {
+    fn on_found(&self, name: &str, value: &PropertyValue, context: DisplayContext) {
         eprintln!(
             "Found property: {name} = {}\n\t{context}\n\torigin: {}",
             value.value, value.origin
         );
+    }
+
+    fn on_error(&self, error: SearchError) {
+        match error {
+            SearchError::MissingPropertyError { name, context } => {
+                eprintln!("Property not found: {name}\n\t{context}");
+            }
+            SearchError::EmptyPropertyError { name, context } => {
+                eprintln!("Empty property found: {name}\n\t{context}");
+            }
+            SearchError::AmbiguousPropertyError {
+                count,
+                name,
+                context,
+            } => {
+                eprintln!("Ambiguous property found ({count} values): {name}\n\t{context}");
+            }
+        }
     }
 }
 
