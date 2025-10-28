@@ -54,6 +54,10 @@
 //! - [x] The parser doesn't track files right now, which isn't great.
 //! - [x] Log when a property could not be found, and when it's ambiguous.
 //! - [x] Support search with default value, which doesn't return a `Result`.
+//! - [ ] String interpolation from environment variables (or whatever injected mapping)
+//! - [ ] `ContextState::debug_context` probably doesn't correctly communicate `@constrain` or
+//!       `@context` statements... Instead of a separate queue, we may want to compute it directly
+//!       from the dag.
 //! - [ ] `stable` channel support: I'm currently on `nightly` for some odd `thiserror` reasons, but I
 //!       don't think I should require that. I'll need to figure that out.
 //! - [ ] Opt-in Arc vs Rc context?
