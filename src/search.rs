@@ -62,7 +62,7 @@ impl<T: AsRef<str>, U: AsRef<str>> AsKey for (T, U) {
 }
 
 #[derive(Clone)]
-pub struct Context<Acc: Accumulator, Tracer: PropertyTracer> {
+pub struct Context<Acc, Tracer> {
     dag: Dag,
     tracer: Tracer,
     state: ContextState<Acc>,
@@ -255,7 +255,7 @@ pub type Tallies = PersistentMap<Node, usize>;
 type CurrentConstraints = VecDeque<Constraint>;
 
 #[derive(Default, Clone, Debug)]
-struct ContextState<Acc: Accumulator> {
+struct ContextState<Acc> {
     tallies: Tallies,
     or_specificities: PersistentMap<Node, Specificity>,
     props: PersistentMap<PersistentStr, Acc>,

@@ -145,7 +145,7 @@ pub type CcsResult<T> = Result<T, CcsError>;
 ///
 /// In tests, you may want [`Context::from_str`] with test implementations of resolvers and tracers.
 #[derive(Clone)]
-pub struct Context<Tracer: PropertyTracer> {
+pub struct Context<Tracer> {
     context: search::Context<search::MaxAccumulator, Tracer>,
 }
 
