@@ -7,7 +7,7 @@ use crate::{
     },
     dag::{self, Node, NodeType},
     load_helper,
-    tracer::PropertyTracer,
+    tracer::ClonablePropertyTracer,
 };
 
 // TODO: Make thread-safety opt-in? These should be the only changes...
@@ -67,7 +67,7 @@ pub struct Context<Acc, Tracer> {
     tracer: Tracer,
     state: ContextState<Acc>,
 }
-impl<Acc: Accumulator, Tracer: PropertyTracer> Context<Acc, Tracer> {
+impl<Acc: Accumulator, Tracer: ClonablePropertyTracer> Context<Acc, Tracer> {
     pub fn load(
         path: impl AsRef<Path>,
         resolver: impl ImportResolver,

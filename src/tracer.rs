@@ -1,3 +1,5 @@
+use std::{ops::Deref, rc::Rc};
+
 use crate::{SearchError, ast::PropertyValue, search::DisplayContext};
 
 /// A callback which is called by the [`Context`] when a property is found
@@ -6,10 +8,24 @@ use crate::{SearchError, ast::PropertyValue, search::DisplayContext};
 /// found.
 ///
 /// [`Context`]: crate::Context
-pub trait PropertyTracer: Clone {
+pub trait PropertyTracer {
     fn on_found(&self, name: &str, value: &PropertyValue, context: DisplayContext);
     fn on_error(&self, error: SearchError);
 }
+
+pub trait ClonablePropertyTracer: PropertyTracer + Clone {}
+impl<T: PropertyTracer + Clone> ClonablePropertyTracer for T {}
+
+impl<T: ?Sized + PropertyTracer> PropertyTracer for Rc<T> {
+    fn on_found(&self, name: &str, value: &PropertyValue, context: DisplayContext) {
+        self.deref().on_found(name, value, context)
+    }
+
+    fn on_error(&self, error: SearchError) {
+        self.deref().on_error(error);
+    }
+}
+// impl<T: PropertyTracerImpl + Clone> PropertyTracer for Arc<T> {}
 
 /// A [`PropertyTracer`] that does nothing
 #[derive(Clone)]

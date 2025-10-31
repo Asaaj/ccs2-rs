@@ -86,7 +86,7 @@ mod property_helper;
 mod search;
 mod tracer;
 
-use std::path::Path;
+use std::{path::Path, rc::Rc};
 
 #[cfg(feature = "log")]
 pub use crate::tracer::log::LogTracer;
@@ -98,7 +98,7 @@ pub use crate::{
         CommaSeparatedList, ConversionFailed, ConversionResult, ToType, TypedProperty,
     },
     search::{AsKey, DisplayContext, SearchError, SearchResult},
-    tracer::{NullTracer, PropertyTracer},
+    tracer::{ClonablePropertyTracer, NullTracer, PropertyTracer},
 };
 
 /// A common error type for code that tries to find and then convert a property
@@ -144,13 +144,16 @@ pub type CcsResult<T> = Result<T, CcsError>;
 /// the [`Context::load_with_tracer`]. See [`PropertyTracer`] for more information.
 ///
 /// In tests, you may want [`Context::from_str`] with test implementations of resolvers and tracers.
+///
+/// Note that the `PropertyTracer` is behind `Rc` here only for the sake of `Clone` implementations,
+/// but it doesn't actually have to be `Send` or `Sync`.
 #[derive(Clone)]
-pub struct Context<Tracer> {
-    context: search::Context<search::MaxAccumulator, Tracer>,
+pub struct Context {
+    context: search::Context<search::MaxAccumulator, Rc<dyn PropertyTracer>>,
 }
 
 #[cfg(feature = "log")]
-impl Context<LogTracer> {
+impl Context {
     /// Loads a CCS file, and creates a context that logs when and where properties are found
     ///
     /// Uses the [`RelativePathResolver`]
@@ -166,7 +169,7 @@ impl Context<LogTracer> {
     }
 }
 
-impl Context<NullTracer> {
+impl Context {
     /// Creates a context that does not trace when or where properties are found
     ///
     /// Will use an empty [`ImportResolver`], that just skips over import statements. To provide a
@@ -178,7 +181,7 @@ impl Context<NullTracer> {
     }
 }
 
-impl<Tracer: PropertyTracer> Context<Tracer> {
+impl Context {
     fn default_resolver(path: impl AsRef<Path>) -> CcsResult<impl ImportResolver> {
         Ok(RelativePathResolver::siblings_with(path)?)
     }
@@ -188,7 +191,10 @@ impl<Tracer: PropertyTracer> Context<Tracer> {
     /// Uses the [`RelativePathResolver`]
     ///
     /// See [`PropertyTracer`] for more.
-    pub fn load_with_tracer(path: impl AsRef<Path>, tracer: Tracer) -> CcsResult<Self> {
+    pub fn load_with_tracer(
+        path: impl AsRef<Path>,
+        tracer: impl PropertyTracer + 'static,
+    ) -> CcsResult<Self> {
         let path = path.as_ref();
         Self::load(path, Self::default_resolver(&path)?, tracer)
     }
@@ -199,8 +205,9 @@ impl<Tracer: PropertyTracer> Context<Tracer> {
     pub fn load(
         path: impl AsRef<Path>,
         resolver: impl ImportResolver,
-        tracer: Tracer,
+        tracer: impl PropertyTracer + 'static,
     ) -> CcsResult<Self> {
+        let tracer: Rc<dyn PropertyTracer> = Rc::new(tracer);
         Ok(Self {
             context: search::Context::load(path, resolver, tracer)?,
         })
@@ -214,8 +221,9 @@ impl<Tracer: PropertyTracer> Context<Tracer> {
     pub fn from_str(
         ccs: impl AsRef<str>,
         resolver: impl ImportResolver,
-        tracer: Tracer,
+        tracer: impl PropertyTracer + 'static,
     ) -> AstResult<Self> {
+        let tracer: Rc<dyn PropertyTracer> = Rc::new(tracer);
         Ok(Self {
             context: search::Context::from_ccs_with(ccs, resolver, tracer)?,
         })
