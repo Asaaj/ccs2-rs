@@ -86,7 +86,7 @@ mod property_helper;
 mod search;
 mod tracer;
 
-use std::{path::Path, rc::Rc};
+use std::{path::Path, sync::Arc};
 
 #[cfg(feature = "log")]
 pub use crate::tracer::log::LogTracer;
@@ -144,12 +144,9 @@ pub type CcsResult<T> = Result<T, CcsError>;
 /// the [`Context::load_with_tracer`]. See [`PropertyTracer`] for more information.
 ///
 /// In tests, you may want [`Context::from_str`] with test implementations of resolvers and tracers.
-///
-/// Note that the `PropertyTracer` is behind `Rc` here only for the sake of `Clone` implementations,
-/// but it doesn't actually have to be `Send` or `Sync`.
 #[derive(Clone)]
 pub struct Context {
-    context: search::Context<search::MaxAccumulator, Rc<dyn PropertyTracer>>,
+    context: search::Context<search::MaxAccumulator, Arc<dyn PropertyTracer>>,
 }
 
 #[cfg(feature = "log")]
@@ -207,7 +204,7 @@ impl Context {
         resolver: impl ImportResolver,
         tracer: impl PropertyTracer + 'static,
     ) -> CcsResult<Self> {
-        let tracer: Rc<dyn PropertyTracer> = Rc::new(tracer);
+        let tracer: Arc<dyn PropertyTracer> = Arc::new(tracer);
         Ok(Self {
             context: search::Context::load(path, resolver, tracer)?,
         })
@@ -223,7 +220,7 @@ impl Context {
         resolver: impl ImportResolver,
         tracer: impl PropertyTracer + 'static,
     ) -> AstResult<Self> {
-        let tracer: Rc<dyn PropertyTracer> = Rc::new(tracer);
+        let tracer: Arc<dyn PropertyTracer> = Arc::new(tracer);
         Ok(Self {
             context: search::Context::from_ccs_with(ccs, resolver, tracer)?,
         })

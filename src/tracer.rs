@@ -1,4 +1,4 @@
-use std::{ops::Deref, rc::Rc};
+use std::{ops::Deref, sync::Arc};
 
 use crate::{SearchError, ast::PropertyValue, search::DisplayContext};
 
@@ -16,7 +16,7 @@ pub trait PropertyTracer {
 pub trait ClonablePropertyTracer: PropertyTracer + Clone {}
 impl<T: PropertyTracer + Clone> ClonablePropertyTracer for T {}
 
-impl<T: ?Sized + PropertyTracer> PropertyTracer for Rc<T> {
+impl<T: ?Sized + PropertyTracer> PropertyTracer for Arc<T> {
     fn on_found(&self, name: &str, value: &PropertyValue, context: DisplayContext) {
         self.deref().on_found(name, value, context)
     }
