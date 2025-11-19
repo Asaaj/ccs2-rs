@@ -8,7 +8,7 @@ use crate::{SearchError, ast::PropertyValue, search::DisplayContext};
 /// found.
 ///
 /// [`Context`]: crate::Context
-pub trait PropertyTracer {
+pub trait PropertyTracer: Send + Sync {
     fn on_found(&self, name: &str, value: &PropertyValue, context: DisplayContext);
     fn on_error(&self, error: SearchError);
 }

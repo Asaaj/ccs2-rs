@@ -326,3 +326,21 @@ impl Context {
         self.context.dag_to_dot_str()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::NullResolver;
+
+    #[test]
+    fn context_is_send() {
+        fn needs_send(_: impl Send) {}
+        needs_send(Context::from_str("", NullResolver(), NullTracer {}));
+    }
+
+    #[test]
+    fn context_is_sync() {
+        fn needs_sync(_: impl Sync) {}
+        needs_sync(Context::from_str("", NullResolver(), NullTracer {}));
+    }
+}
