@@ -70,8 +70,9 @@
 //! The crate provides the following features:
 //! - `log` (default): Adds the [`LogTracer`] for logging when properties are found. Adds a
 //!   dependency on [`log`].
-//! - `extra_conversions` (default): Adds a parser for getting [`std::time::Duration`] from CCS
-//!   property strings. Adds a dependency on [`humantime`].
+//! - `extra_conversions` (default): Adds a parsers for getting [`std::time::Duration`] and
+//!   [`std::time::SystemTime`] from CCS property strings. Adds a dependency on [`chrono`] and
+//!   [`humantime`].
 //! - `dot`: Adds tools for exporting the underlying DAG to `dot` syntax, which allows for
 //!   visualizing the context's state. Adds a dependency on [`petgraph`].
 

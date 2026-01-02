@@ -117,19 +117,33 @@ num_type!(f64);
 pub mod extras {
     use super::*;
 
-    /// Requires the `extra_conversions` feature, as it uses [`humantime`] crate to do the parsing
+    /// Requires the `extra_conversions` feature, as it uses the [`humantime`] crate to do the parsing
     impl TypedProperty for std::time::Duration {
         fn from_value(prop: &PropertyValue) -> ConversionResult<Self> {
             humantime::parse_duration(prop.value.as_ref()).or_conversion_failed(prop)
         }
     }
+
+    /// Requires the `extra_conversions` feature, as it uses the [`chrono`] crate to do the parsing
+    ///
+    /// See [`chrono::DateTime::parse_from_rfc3339`] for supported formatting
+    impl TypedProperty for std::time::SystemTime {
+        fn from_value(prop: &PropertyValue) -> ConversionResult<Self> {
+            Ok(chrono::DateTime::parse_from_rfc3339(prop.value.as_ref())
+                .or_conversion_failed(prop)?
+                .into())
+            // Ok(humantime::parse_rfc3339_weak(prop.value.as_ref())
+            //     .or_conversion_failed(prop)?
+            //     .into())
+        }
+    }
 }
 
 /// Helper to make the conversion errors easier to spell
-pub trait OrConversionFailed<T: TypedProperty> {
+pub trait OrConversionFailed<T> {
     fn or_conversion_failed(self, original: &PropertyValue) -> ConversionResult<T>;
 }
-impl<T: TypedProperty, E> OrConversionFailed<T> for std::result::Result<T, E> {
+impl<T, E> OrConversionFailed<T> for std::result::Result<T, E> {
     fn or_conversion_failed(self, original: &PropertyValue) -> ConversionResult<T> {
         match self {
             Ok(value) => Ok(value),
@@ -151,7 +165,7 @@ mod tests {
     use super::*;
     use crate::{CcsResult, Context};
     use assert_approx_eq::assert_approx_eq;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime};
 
     #[test]
     fn get_duration() -> CcsResult<()> {
@@ -175,6 +189,30 @@ mod tests {
         assert_eq!(
             context.get("duration2")?.to_type::<Duration>()?,
             Duration::from_hours(29)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn get_system_time() -> CcsResult<()> {
+        let contents = r#"
+        time1 = '2025-01-01T12:34:56Z'
+        time2 = "1999-12-31T12:23:01-04:00"
+        "#;
+        let context = Context::from_str_without_tracing(contents)?;
+
+        assert_eq!(
+            context.get("time1")?.to_type::<SystemTime>()?,
+            chrono::DateTime::parse_from_rfc3339("2025-01-01 12:34:56Z")
+                .unwrap()
+                .into()
+        );
+        assert_eq!(
+            context.get("time2")?.to_type::<SystemTime>()?,
+            chrono::DateTime::parse_from_rfc3339("1999-12-31T12:23:01-04:00")
+                .unwrap()
+                .into()
         );
 
         Ok(())

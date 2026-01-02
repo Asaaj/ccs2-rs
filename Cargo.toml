@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+chrono = { version = "0.4", optional = true }
 humantime = { version = "2", optional = true }
 indexmap = "2.11"
 itertools = "0.14"
@@ -18,10 +19,10 @@ thiserror = "2.0"
 default = ["log", "extra_conversions"]
 dot = ["petgraph"]
 log = ["dep:log"]
-extra_conversions = ["humantime"]
+extra_conversions = ["chrono", "humantime"]
 
 [dev-dependencies]
 anyhow = "1.0"
-assert_approx_eq = "1.1.0"
+assert_approx_eq = "1.1"
 env_logger = "0.11"
 pretty_assertions = "1.4"
