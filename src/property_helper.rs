@@ -132,9 +132,18 @@ pub mod extras {
             Ok(chrono::DateTime::parse_from_rfc3339(prop.value.as_ref())
                 .or_conversion_failed(prop)?
                 .into())
-            // Ok(humantime::parse_rfc3339_weak(prop.value.as_ref())
-            //     .or_conversion_failed(prop)?
-            //     .into())
+        }
+    }
+
+    impl TypedProperty for chrono::DateTime<chrono::FixedOffset> {
+        fn from_value(prop: &PropertyValue) -> ConversionResult<Self> {
+            let date_time = chrono::DateTime::parse_from_rfc3339(prop.value.as_ref())
+                .or_conversion_failed(prop)?;
+            let offset = date_time.offset();
+            Ok(chrono::DateTime::from_naive_utc_and_offset(
+                date_time.naive_utc(),
+                *offset,
+            ))
         }
     }
 }
@@ -213,6 +222,23 @@ mod tests {
             chrono::DateTime::parse_from_rfc3339("1999-12-31T12:23:01-04:00")
                 .unwrap()
                 .into()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn get_date_time() -> CcsResult<()> {
+        let contents = r#"
+        time = "1999-12-31T12:23:01-04:00"
+        "#;
+        let context = Context::from_str_without_tracing(contents)?;
+
+        assert_eq!(
+            context
+                .get("time")?
+                .to_type::<chrono::DateTime<chrono::FixedOffset>>()?,
+            chrono::DateTime::parse_from_rfc3339("1999-12-31T12:23:01-04:00").unwrap()
         );
 
         Ok(())
