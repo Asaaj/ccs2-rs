@@ -29,12 +29,8 @@ impl PropertyTracer for EPrintTracer {
             SearchError::EmptyPropertyError { name, context } => {
                 eprintln!("Empty property found: {name}\n\t{context}");
             }
-            SearchError::AmbiguousPropertyError {
-                count,
-                name,
-                context,
-            } => {
-                eprintln!("Ambiguous property found ({count} values): {name}\n\t{context}");
+            error @ SearchError::AmbiguousPropertyError { .. } => {
+                eprintln!("{error}");
             }
         }
     }

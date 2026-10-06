@@ -77,15 +77,8 @@ pub(crate) mod log {
                         "Empty property found: {name}\n\t{context}"
                     );
                 }
-                SearchError::AmbiguousPropertyError {
-                    count,
-                    name,
-                    context,
-                } => {
-                    ::log::log!(
-                        self.error_level,
-                        "Ambiguous property found ({count} values): {name}\n\t{context}"
-                    );
+                error @ SearchError::AmbiguousPropertyError { .. } => {
+                    ::log::log!(self.error_level, "{error}");
                 }
             }
         }

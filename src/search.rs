@@ -32,12 +32,21 @@ pub enum SearchError {
         name: String,
         context: DisplayContext,
     },
-    #[error("Found {count} properties matching '{name}' {context}")]
+    #[error("Found {count} properties matching '{name}' {context}{details}", details = ambiguity_details(.values))]
     AmbiguousPropertyError {
         count: usize,
         name: String,
         context: DisplayContext,
+        /// Equally specific property records, including their values and source locations.
+        values: Vec<PropertyValue>,
     },
+}
+
+fn ambiguity_details(values: &[PropertyValue]) -> String {
+    values
+        .iter()
+        .map(|value| format!("\n\tvalue: {:?}, origin: {}", value.value, value.origin))
+        .collect()
 }
 
 pub type SearchResult<T> = std::result::Result<T, SearchError>;
@@ -123,10 +132,20 @@ impl<Acc: Accumulator, Tracer: ClonablePropertyTracer> Context<Acc, Tracer> {
             self.tracer.on_error(err.clone());
             Err(err)
         } else if properties.len() > 1 {
+            let mut values: Vec<_> = properties.cloned().collect();
+            values.sort_by(|a, b| {
+                a.origin
+                    .filename
+                    .cmp(&b.origin.filename)
+                    .then_with(|| a.origin.line_number.cmp(&b.origin.line_number))
+                    .then_with(|| a.value.cmp(&b.value))
+                    .then_with(|| a.override_level.cmp(&b.override_level))
+            });
             let err = SearchError::AmbiguousPropertyError {
-                count: properties.len(),
+                count: values.len(),
                 name,
                 context: self.state.display_context(),
+                values,
             };
             self.tracer.on_error(err.clone());
             Err(err)
@@ -515,6 +534,58 @@ mod tests {
         ));
 
         assert_eq!(&*ctx.get_single_value("c").unwrap(), "4.3");
+    }
+
+    #[test]
+    fn ambiguity_includes_winning_values_and_origins() {
+        struct NamedResolver;
+        impl ImportResolver for NamedResolver {
+            fn current_file_name(&self) -> std::path::PathBuf {
+                "ambiguity.ccs".into()
+            }
+
+            fn new_context(&self, _: &Path) -> crate::AstResult<Self> {
+                unreachable!("test has no imports")
+            }
+
+            fn load(&self) -> crate::AstResult<String> {
+                unreachable!("test uses inline configuration")
+            }
+        }
+
+        let context = Context::<MaxAccumulator, _>::from_ccs_with(
+            "x = fallback\na : x = same\nb : x = same\nc : x = different\n",
+            NamedResolver,
+            NullTracer {},
+        )
+        .unwrap()
+        .augment("a")
+        .augment("b")
+        .augment("c");
+
+        let error = context.get_single_property("x").unwrap_err();
+        let SearchError::AmbiguousPropertyError { count, values, .. } = &error else {
+            panic!("expected ambiguity, got {error}");
+        };
+        assert_eq!(*count, 3);
+        assert_eq!(
+            values
+                .iter()
+                .map(|v| (v.value.as_ref(), v.origin.line_number))
+                .collect::<Vec<_>>(),
+            vec![("same", 2), ("same", 3), ("different", 4)]
+        );
+        assert!(
+            values
+                .iter()
+                .all(|v| v.origin.filename == Path::new("ambiguity.ccs"))
+        );
+        assert_eq!(
+            error.to_string(),
+            "Found 3 properties matching 'x' in context: [ a > b > c ]\n\tvalue: \"same\", \
+             origin: ambiguity.ccs:2\n\tvalue: \"same\", origin: ambiguity.ccs:3\n\tvalue: \
+             \"different\", origin: ambiguity.ccs:4"
+        );
     }
 
     #[test]
