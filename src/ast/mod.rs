@@ -484,7 +484,13 @@ pub fn flatten(expr: Selector) -> Selector {
     match expr {
         Selector::Step(k) => Selector::Step(k),
         Selector::Expr(expr) => {
-            let mut lit_children = IndexMap::<Selector, IndexSet<PersistentStr>>::default();
+            #[derive(PartialEq, Eq, Hash)]
+            struct LiteralGroup {
+                name: PersistentStr,
+                is_wildcard: bool,
+            }
+
+            let mut lit_children = IndexMap::<LiteralGroup, IndexSet<PersistentStr>>::default();
             let mut new_children = Vec::<Selector>::default();
 
             let mut add_child = |e: Selector| {
@@ -495,13 +501,16 @@ pub fn flatten(expr: Selector) -> Selector {
                         // normalize()??, so this is a bit of an arbitrary choice...
                         // TODO negative matches will need to be handled here, probably adding as separate clusters,
                         // depending on specificity rules?
-                        // TODO wildcard matches also need to be handled specially here, either as a flag on the key or
-                        // a special entry in values...
+                        // Keep wildcard alternatives separate so they retain their matching behavior
+                        // and lower specificity alongside explicitly valued alternatives.
                         // TODO if this is done prior to normalize(), that function needs to be changed to understand
                         // set-valued pos/neg literals... and might need to be changed for negative literals either way?
-                        let key_without_values = Key::new(key.name, []);
+                        let is_wildcard = key.values.is_empty();
                         lit_children
-                            .entry(Selector::Step(key_without_values))
+                            .entry(LiteralGroup {
+                                name: key.name,
+                                is_wildcard,
+                            })
                             .or_default()
                             .extend(key.values.iter().cloned());
                     }
@@ -526,13 +535,8 @@ pub fn flatten(expr: Selector) -> Selector {
                 }
             }
 
-            for (child, values) in lit_children {
-                match child {
-                    Selector::Step(key) => {
-                        new_children.push(Selector::Step(Key::new(key.name, values)))
-                    }
-                    Selector::Expr(..) => panic!("Attempted to add literal expr!"),
-                }
+            for (group, values) in lit_children {
+                new_children.push(Selector::Step(Key::new(group.name, values)));
             }
             if new_children.len() == 1 {
                 new_children.into_iter().next().unwrap()

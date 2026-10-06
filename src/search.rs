@@ -589,6 +589,40 @@ mod tests {
     }
 
     #[test]
+    fn wildcard_survives_or_with_valued_selector() {
+        for source in [
+            "device : deviceClass = quoting",
+            "device.dro0, device : deviceClass = quoting",
+            "device, device.dro0 : deviceClass = quoting",
+        ] {
+            let ctx = Context::from_ccs(source).unwrap();
+
+            for name in ["dro0", "dro2"] {
+                let device = ctx.augment(("device", name));
+                let property = device
+                    .get_single_property("deviceClass")
+                    .unwrap_or_else(|error| panic!("{source:?}, device={name}: {error}"));
+                assert_eq!(&*property.value, "quoting");
+            }
+
+            assert!(ctx.get_single_property("deviceClass").is_err());
+            assert!(
+                ctx.augment(("other", "dro2"))
+                    .get_single_property("deviceClass")
+                    .is_err()
+            );
+        }
+
+        let ctx = Context::from_ccs("device.dro0 : deviceClass = quoting").unwrap();
+
+        assert!(
+            ctx.augment(("device", "dro2"))
+                .get_single_property("deviceClass")
+                .is_err()
+        );
+    }
+
+    #[test]
     fn with_root_node() {
         let context = Context::from_ccs(
             r#"
