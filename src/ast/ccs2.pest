@@ -48,7 +48,7 @@ selector_component = ${ selector_def | selector_group }
 selector_def       = ${ key }
 selector_group     = _{ lparen ~ IGNORED* ~ selector ~ IGNORED* ~ rparen }
 
-ctx_def        = { WS* ~ selector ~ IGNORED* ~ colon ~ IGNORED* ~ (prop_def | constrain_stmt) }
+ctx_def        = { WS* ~ selector ~ IGNORED* ~ colon ~ IGNORED* ~ (prop_def | constrain_stmt | import_stmt) }
 ctx_block      = { WS* ~ selector ~ IGNORED* ~ block }
 block          = _{ IGNORED* ~ lbrace ~ IGNORED* ~ block_stmt* ~ IGNORED* ~ rbrace }
 

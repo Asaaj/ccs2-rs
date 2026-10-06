@@ -501,6 +501,7 @@ mod tests {
         {fail: (constrain_without_quotes, "@constrainasdf")},
         {succ: (weird_spacing, "@import 'asdf' \n ; \n @constrain asdf \n ; @import 'foo'  ")},
         {succ: (comment_between_import, "@import /*hi*/ 'asdf'")},
+        {succ: (import_following_constraint, "xyz : @import 'asdf'")},
         {succ: (comment_between_key_and_block, "env.foo/* some comment */{ }")},
     }
 
